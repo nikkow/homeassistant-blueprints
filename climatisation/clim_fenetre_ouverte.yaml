@@ -1,0 +1,146 @@
+blueprint:
+  name: Coupure clim/chauffage à l'ouverture d'une fenêtre
+  description: >
+    Lorsqu'une fenêtre de la pièce est ouverte, l'état courant de la
+    climatisation / du chauffage est sauvegardé (mode HVAC, consigne, preset,
+    ventilation…) via un snapshot de scène, puis l'équipement est éteint.
+    Lorsque toutes les fenêtres de la pièce sont refermées, l'état précédent est
+    restauré à l'identique.
+
+    À instancier une fois par pièce.
+  domain: automation
+  input:
+    fenetres:
+      name: Capteurs d'ouverture
+      description: >
+        Capteurs de contact des fenêtres de la pièce. La coupure a lieu dès
+        qu'une fenêtre s'ouvre ; la restauration n'a lieu que lorsque toutes
+        sont refermées.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: binary_sensor
+    climatisations:
+      name: Climatisation / chauffage
+      description: Entités climate de la pièce à couper puis restaurer.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: climate
+    delai_ouverture:
+      name: Délai avant coupure
+      description: >
+        Durée pendant laquelle la fenêtre doit rester ouverte avant de couper.
+        Évite de réagir à une ouverture de quelques secondes.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 30
+      selector:
+        duration:
+    delai_fermeture:
+      name: Délai avant restauration
+      description: Temps d'attente après la fermeture de la fenêtre avant de restaurer.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 0
+      selector:
+        duration:
+    duree_max:
+      name: Durée maximale d'ouverture
+      description: >
+        Au-delà de cette durée d'ouverture, la restauration est abandonnée :
+        l'équipement reste éteint à la fermeture. Laisser à 0 pour restaurer
+        quelle que soit la durée d'ouverture.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 0
+      selector:
+        duration:
+          enable_day: true
+    seulement_si_off:
+      name: Ne restaurer que si rien n'a été touché
+      description: >
+        Si activé, la restauration est annulée lorsqu'un équipement a été
+        rallumé manuellement pendant que la fenêtre était ouverte.
+      default: true
+      selector:
+        boolean:
+
+mode: single
+max_exceeded: silent
+
+variables:
+  fenetres: !input fenetres
+  climatisations: !input climatisations
+  duree_max: !input duree_max
+  seulement_si_off: !input seulement_si_off
+  scene_id: "backup_clim_{{ this.entity_id.split('.')[1] }}"
+  timeout_sec: >-
+    {% set s = (duree_max.days | default(0) | int) * 86400
+             + (duree_max.hours | default(0) | int) * 3600
+             + (duree_max.minutes | default(0) | int) * 60
+             + (duree_max.seconds | default(0) | int) %}
+    {{ 31536000 if s == 0 else s }}
+
+triggers:
+  - trigger: state
+    entity_id: !input fenetres
+    to: "on"
+    for: !input delai_ouverture
+
+conditions:
+  # Au moins un équipement est réellement en marche : sinon rien à sauvegarder.
+  - condition: template
+    value_template: >-
+      {{ expand(climatisations)
+         | rejectattr('state', 'in', ['off', 'unavailable', 'unknown'])
+         | list | count > 0 }}
+
+actions:
+  # 1. Sauvegarde de l'état courant (mode, consigne, preset, ventilation…).
+  - action: scene.create
+    data:
+      scene_id: "{{ scene_id }}"
+      snapshot_entities: "{{ climatisations }}"
+
+  # 2. Coupure.
+  - action: climate.turn_off
+    target:
+      entity_id: !input climatisations
+
+  # 3. Attente de la fermeture de toutes les fenêtres.
+  - wait_template: >-
+      {{ expand(fenetres) | selectattr('state', 'eq', 'on') | list | count == 0 }}
+    timeout: "{{ timeout_sec }}"
+    continue_on_timeout: true
+
+  # 4. Restauration, sauf si la fenêtre est restée ouverte trop longtemps.
+  - if:
+      - condition: template
+        value_template: "{{ wait.completed }}"
+    then:
+      - delay: !input delai_fermeture
+      # Un équipement rallumé à la main pendant l'ouverture prime sur la restauration.
+      - if:
+          - condition: template
+            value_template: >-
+              {{ not seulement_si_off
+                 or expand(climatisations)
+                    | rejectattr('state', 'in', ['off', 'unavailable', 'unknown'])
+                    | list | count == 0 }}
+        then:
+          - action: scene.turn_on
+            target:
+              entity_id: "scene.{{ scene_id }}"
+
+  # 5. Nettoyage de la scène temporaire, quel que soit le chemin emprunté.
+  #    continue_on_error : scene.delete n'existe qu'à partir de HA 2023.4.
+  - action: scene.delete
+    continue_on_error: true
+    target:
+      entity_id: "scene.{{ scene_id }}"
