@@ -1,0 +1,165 @@
+blueprint:
+  name: Alerte batteries faibles
+  description: >
+    Balaye périodiquement toutes les entités de batterie de l'installation et
+    envoie une notification unique listant celles passées sous le seuil.
+
+    Le balayage est global : aucune entité n'est à déclarer, les nouveaux
+    appareils sont pris en compte automatiquement. La notification n'est envoyée
+    que s'il y a au moins une batterie faible.
+
+    À instancier une seule fois.
+  domain: automation
+  input:
+    seuil:
+      name: Seuil d'alerte
+      description: Niveau en dessous ou égal auquel une batterie est signalée.
+      default: 20
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+    heure:
+      name: Heure de vérification
+      default: "09:00:00"
+      selector:
+        time:
+    jours:
+      name: Jours de vérification
+      description: >
+        Jours où la vérification a lieu. Ne cocher qu'un seul jour transforme
+        l'alerte quotidienne en rappel hebdomadaire.
+      default: [mon, tue, wed, thu, fri, sat, sun]
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Lundi
+              value: mon
+            - label: Mardi
+              value: tue
+            - label: Mercredi
+              value: wed
+            - label: Jeudi
+              value: thu
+            - label: Vendredi
+              value: fri
+            - label: Samedi
+              value: sat
+            - label: Dimanche
+              value: sun
+    exclusions:
+      name: Entités à ignorer
+      description: >
+        Capteurs de batterie à ne jamais signaler (appareil sur secteur mal
+        déclaré, capteur en panne connue…).
+      default: []
+      selector:
+        entity:
+          multiple: true
+    inclure_binaires:
+      name: Inclure les capteurs binaires
+      description: >
+        Prend aussi en compte les binary_sensor de classe « battery », qui
+        signalent une batterie faible sans donner de pourcentage.
+      default: true
+      selector:
+        boolean:
+    inclure_attributs:
+      name: Inclure l'attribut battery_level
+      description: >
+        Prend aussi en compte les entités exposant leur niveau via l'attribut
+        battery_level (téléphones, anciens appareils Xiaomi…). Peut produire des
+        doublons avec les capteurs dédiés du même appareil.
+      default: false
+      selector:
+        boolean:
+    actions_notification:
+      name: Notification
+      description: >
+        Actions à exécuter quand au moins une batterie est faible. Les variables
+        disponibles sont décrites dans le README : message, titre, nombre,
+        liste, batteries.
+      selector:
+        action:
+
+mode: single
+max_exceeded: silent
+
+variables:
+  seuil: !input seuil
+  exclusions: !input exclusions
+  inclure_binaires: !input inclure_binaires
+  inclure_attributs: !input inclure_attributs
+  batteries: >-
+    {% set ns = namespace(items=[]) %}
+    {% for s in states.sensor
+         | selectattr('attributes.device_class', 'defined')
+         | selectattr('attributes.device_class', 'eq', 'battery')
+         | rejectattr('entity_id', 'in', exclusions) %}
+      {% if s.state | is_number and s.state | float(100) <= seuil | float %}
+        {% set ns.items = ns.items + [{
+             'nom': s.name,
+             'entite': s.entity_id,
+             'niveau': s.state | float(100),
+             'texte': (s.state | float | round(0) | int) ~ ' %'}] %}
+      {% endif %}
+    {% endfor %}
+    {% if inclure_binaires %}
+      {% for s in states.binary_sensor
+           | selectattr('attributes.device_class', 'defined')
+           | selectattr('attributes.device_class', 'eq', 'battery')
+           | selectattr('state', 'eq', 'on')
+           | rejectattr('entity_id', 'in', exclusions) %}
+        {% set ns.items = ns.items + [{
+             'nom': s.name,
+             'entite': s.entity_id,
+             'niveau': -1,
+             'texte': 'batterie faible'}] %}
+      {% endfor %}
+    {% endif %}
+    {% if inclure_attributs %}
+      {% for s in states
+           | selectattr('attributes.battery_level', 'defined')
+           | rejectattr('entity_id', 'in', exclusions) %}
+        {% if s.attributes.battery_level | is_number
+              and s.attributes.battery_level | float(100) <= seuil | float %}
+          {% set ns.items = ns.items + [{
+               'nom': s.name,
+               'entite': s.entity_id,
+               'niveau': s.attributes.battery_level | float(100),
+               'texte': (s.attributes.battery_level | float | round(0) | int) ~ ' %'}] %}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+    {{ ns.items | sort(attribute='niveau') }}
+  nombre: "{{ batteries | count }}"
+  liste: >-
+    {% set ns = namespace(l=[]) %}
+    {% for b in batteries %}
+      {% set ns.l = ns.l + [b.nom ~ ' : ' ~ b.texte] %}
+    {% endfor %}
+    {{ ns.l }}
+  titre: "Batteries faibles ({{ nombre }})"
+  # Bloc littéral (|-) : les retours à la ligne de la liste doivent être
+  # conservés, un bloc plié (>-) les transformerait en espaces.
+  message: |-
+    {{ nombre }} batterie(s) au niveau ou en dessous de {{ seuil }} % :
+    {%- for b in batteries %}
+    - {{ b.nom }} : {{ b.texte }}
+    {%- endfor %}
+
+triggers:
+  - trigger: time
+    at: !input heure
+
+conditions:
+  - condition: time
+    weekday: !input jours
+  - condition: template
+    value_template: "{{ nombre | int > 0 }}"
+
+actions:
+  - sequence: !input actions_notification

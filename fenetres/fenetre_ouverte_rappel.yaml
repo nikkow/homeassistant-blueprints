@@ -1,0 +1,194 @@
+blueprint:
+  name: Rappel fenêtre restée ouverte
+  description: >
+    Signale une fenêtre ouverte depuis trop longtemps quand il fait froid
+    dehors, et signale les fenêtres encore ouvertes au moment où la maison se
+    vide.
+
+    Le rappel est répété à intervalle régulier tant que la fenêtre reste
+    ouverte, dans la limite d'un nombre maximal de rappels. Une notification
+    facultative peut être envoyée à la fermeture.
+
+    À instancier une fois par logement ; le rappel « durée » est traité fenêtre
+    par fenêtre.
+  domain: automation
+  input:
+    fenetres:
+      name: Capteurs d'ouverture
+      description: Capteurs de contact des fenêtres à surveiller.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: binary_sensor
+    delai:
+      name: Délai avant le premier rappel
+      description: Durée d'ouverture au-delà de laquelle la fenêtre est signalée.
+      default:
+        hours: 0
+        minutes: 10
+        seconds: 0
+      selector:
+        duration:
+    capteurs_temperature:
+      name: Capteurs de température extérieure
+      description: >
+        Optionnel. Laisser vide pour signaler les fenêtres quelle que soit la
+        température. Avec plusieurs capteurs, c'est la valeur la plus basse qui
+        est comparée au seuil.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: sensor
+              device_class: temperature
+    seuil_temperature:
+      name: Seuil de température
+      description: >
+        Le rappel « durée » n'a lieu que si la température extérieure est
+        inférieure ou égale à cette valeur. Le rappel « départ » n'en tient pas
+        compte.
+      default: 12
+      selector:
+        number:
+          min: -20
+          max: 40
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: box
+    entites_presence:
+      name: Entités de présence
+      description: >
+        Optionnel. Quand l'une de ces entités passe à « absent », les fenêtres
+        encore ouvertes sont signalées immédiatement. Pour ne réagir qu'au
+        départ du dernier occupant, indiquer un groupe de personnes plutôt que
+        chaque personne.
+      default: []
+      selector:
+        entity:
+          multiple: true
+    intervalle_rappel:
+      name: Intervalle entre deux rappels
+      default:
+        hours: 0
+        minutes: 15
+        seconds: 0
+      selector:
+        duration:
+    rappels_max:
+      name: Nombre maximal de rappels
+      description: Mettre à 0 pour rappeler indéfiniment tant que la fenêtre est ouverte.
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 20
+          mode: box
+    actions_notification:
+      name: Notification
+      description: >
+        Actions à exécuter à chaque rappel. Les variables disponibles sont
+        décrites dans le README : message, titre, motif, nombre, noms, cibles.
+      selector:
+        action:
+    actions_fermeture:
+      name: Notification de fermeture
+      description: >
+        Optionnel. Actions à exécuter lorsque les fenêtres signalées ont toutes
+        été refermées.
+      default: []
+      selector:
+        action:
+
+mode: parallel
+max: 25
+max_exceeded: silent
+
+variables:
+  fenetres: !input fenetres
+  capteurs_temperature: !input capteurs_temperature
+  seuil_temperature: !input seuil_temperature
+  rappels_max: !input rappels_max
+  # `trigger` est absent lors d'une exécution manuelle de l'automatisation.
+  motif: "{{ trigger.id | default('duree') if trigger is defined else 'duree' }}"
+  # Rappel « durée » : la fenêtre qui vient de dépasser le délai.
+  # Rappel « départ » : toutes celles encore ouvertes à cet instant.
+  cibles: >-
+    {% if motif == 'depart' %}
+    {{ expand(fenetres) | selectattr('state', 'eq', 'on')
+       | map(attribute='entity_id') | list }}
+    {% else %}
+    {{ [trigger.entity_id] if trigger is defined and trigger.entity_id is defined
+       else [] }}
+    {% endif %}
+  noms: "{{ expand(cibles) | map(attribute='name') | list }}"
+  nombre: "{{ cibles | count }}"
+  # -999 = aucune mesure exploitable : le seuil de température est ignoré.
+  temperature_ext: >-
+    {% set v = expand(capteurs_temperature) | map(attribute='state')
+               | select('is_number') | map('float') | list %}
+    {{ v | min if v | count > 0 else -999 }}
+  titre: >-
+    {{ 'Départ : fenêtre ouverte' if motif == 'depart' else 'Fenêtre ouverte' }}
+  # Bloc plié (>-) : le message tient sur une ligne, les retours à la ligne
+  # deviennent des espaces et les marqueurs `-%}` suppriment ceux qui restent.
+  message: >-
+    {% if motif == 'depart' -%}
+    Personne à la maison et {{ nombre }} fenêtre(s) encore ouverte(s) :
+    {{ noms | join(', ') }}.
+    {%- else -%}
+    {{ noms | join(', ') }} est ouverte et il fait
+    {{ temperature_ext | round(1) }} °C dehors.
+    {%- endif %}
+
+triggers:
+  - trigger: state
+    entity_id: !input fenetres
+    to: "on"
+    for: !input delai
+    id: duree
+  # Personne / groupe de personnes / device_tracker qui quitte la maison.
+  - trigger: state
+    entity_id: !input entites_presence
+    to: "not_home"
+    id: depart
+  # Capteur de présence binaire qui retombe.
+  - trigger: state
+    entity_id: !input entites_presence
+    from: "on"
+    to: "off"
+    id: depart
+
+conditions:
+  - condition: template
+    value_template: "{{ nombre | int > 0 }}"
+  - condition: template
+    value_template: >-
+      {{ motif == 'depart'
+         or temperature_ext | float <= seuil_temperature | float }}
+
+actions:
+  - repeat:
+      sequence:
+        - sequence: !input actions_notification
+        # L'attente s'interrompt dès la fermeture, sinon on rappelle.
+        - wait_template: >-
+            {{ expand(cibles) | selectattr('state', 'eq', 'on')
+               | list | count == 0 }}
+          timeout: !input intervalle_rappel
+          continue_on_timeout: true
+      until:
+        - condition: template
+          value_template: >-
+            {{ expand(cibles) | selectattr('state', 'eq', 'on')
+               | list | count == 0
+               or (rappels_max | int > 0 and repeat.index >= rappels_max | int) }}
+
+  - if:
+      - condition: template
+        value_template: >-
+          {{ expand(cibles) | selectattr('state', 'eq', 'on')
+             | list | count == 0 }}
+    then:
+      - sequence: !input actions_fermeture

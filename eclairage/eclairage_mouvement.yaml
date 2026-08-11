@@ -1,0 +1,252 @@
+blueprint:
+  name: Éclairage sur mouvement avec luminosité adaptative
+  description: >
+    Allume une ou plusieurs lumières sur détection de mouvement, avec une
+    luminosité et une température de couleur différentes le jour et la nuit,
+    puis les éteint après une période sans mouvement.
+
+    Le seuil de luminosité n'est évalué que lorsque toutes les lumières sont
+    éteintes : la lumière produite par l'automatisation ne peut donc pas
+    l'empêcher de se déclencher au cycle suivant.
+
+    À l'extinction, l'état de chaque lumière est comparé à celui appliqué par
+    l'automatisation. Une lumière modifiée entre-temps (variateur, interrupteur
+    mural, scène) est laissée telle quelle.
+
+    À instancier une fois par pièce.
+  domain: automation
+  input:
+    capteurs_mouvement:
+      name: Capteurs de mouvement
+      description: >
+        Capteurs de mouvement ou de présence de la pièce. L'allumage a lieu dès
+        qu'un capteur passe à « détecté » ; le minuteur d'extinction ne démarre
+        que lorsque tous sont retombés.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: binary_sensor
+    lumieres:
+      name: Lumières
+      description: Lumières à piloter.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+    capteurs_luminosite:
+      name: Capteurs de luminosité
+      description: >
+        Optionnel. Laisser vide pour allumer quelle que soit la luminosité
+        ambiante. Si plusieurs capteurs sont indiqués, c'est la valeur la plus
+        basse qui est comparée au seuil.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: sensor
+              device_class: illuminance
+    seuil_lux:
+      name: Seuil de luminosité
+      description: >
+        L'allumage n'a lieu que si la luminosité mesurée est inférieure ou égale
+        à cette valeur. Sans capteur de luminosité, ce réglage est ignoré.
+      default: 20
+      selector:
+        number:
+          min: 0
+          max: 2000
+          step: 5
+          unit_of_measurement: lx
+          mode: box
+    delai_extinction:
+      name: Délai avant extinction
+      description: Temps sans mouvement avant d'éteindre.
+      default:
+        hours: 0
+        minutes: 2
+        seconds: 0
+      selector:
+        duration:
+    debut_nuit:
+      name: Début du mode nuit
+      default: "22:00:00"
+      selector:
+        time:
+    fin_nuit:
+      name: Fin du mode nuit
+      default: "07:00:00"
+      selector:
+        time:
+    luminosite_jour:
+      name: Luminosité de jour
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+    kelvin_jour:
+      name: Température de couleur de jour
+      description: >
+        Mettre à 0 pour ne pas envoyer de température de couleur — nécessaire
+        pour les lumières non réglables en blanc.
+      default: 4000
+      selector:
+        number:
+          min: 0
+          max: 6500
+          step: 100
+          unit_of_measurement: K
+          mode: box
+    luminosite_nuit:
+      name: Luminosité de nuit
+      default: 25
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+    kelvin_nuit:
+      name: Température de couleur de nuit
+      description: Mettre à 0 pour ne pas envoyer de température de couleur.
+      default: 2200
+      selector:
+        number:
+          min: 0
+          max: 6500
+          step: 100
+          unit_of_measurement: K
+          mode: box
+    transition:
+      name: Durée de transition
+      description: Fondu à l'allumage et à l'extinction.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 30
+          unit_of_measurement: s
+          mode: box
+    respecter_manuel:
+      name: Respecter les réglages manuels
+      description: >
+        Si activé, une lumière dont l'état ou la luminosité a changé depuis
+        l'allumage automatique n'est pas éteinte.
+      default: true
+      selector:
+        boolean:
+    entites_blocage:
+      name: Entités de blocage
+      description: >
+        Optionnel. Tant que l'une de ces entités est à « on », l'automatisation
+        ne fait rien (mode cinéma, invités, ménage…).
+      default: []
+      selector:
+        entity:
+          multiple: true
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  capteurs_mouvement: !input capteurs_mouvement
+  lumieres: !input lumieres
+  capteurs_luminosite: !input capteurs_luminosite
+  seuil_lux: !input seuil_lux
+  entites_blocage: !input entites_blocage
+  respecter_manuel: !input respecter_manuel
+  debut_nuit: !input debut_nuit
+  fin_nuit: !input fin_nuit
+  luminosite_jour: !input luminosite_jour
+  luminosite_nuit: !input luminosite_nuit
+  kelvin_jour: !input kelvin_jour
+  kelvin_nuit: !input kelvin_nuit
+  transition: !input transition
+  # -1 = aucune mesure exploitable : le seuil de luminosité est alors ignoré.
+  lux_mesure: >-
+    {% set v = expand(capteurs_luminosite) | map(attribute='state')
+               | select('is_number') | map('float') | list %}
+    {{ v | min if v | count > 0 else -1 }}
+  est_nuit: >-
+    {% set m = now().hour * 60 + now().minute %}
+    {% set d = debut_nuit.split(':')[0] | int * 60 + debut_nuit.split(':')[1] | int %}
+    {% set f = fin_nuit.split(':')[0] | int * 60 + fin_nuit.split(':')[1] | int %}
+    {{ (d <= m < f) if d < f else (m >= d or m < f) }}
+  luminosite_cible: "{{ luminosite_nuit if est_nuit else luminosite_jour }}"
+  kelvin_cible: "{{ kelvin_nuit if est_nuit else kelvin_jour }}"
+  parametres: >-
+    {% set base = {'transition': transition | int(0),
+                   'brightness_pct': luminosite_cible | int} %}
+    {{ dict(base, color_temp_kelvin=kelvin_cible | int)
+       if kelvin_cible | int > 0 else base }}
+
+triggers:
+  - trigger: state
+    entity_id: !input capteurs_mouvement
+    to: "on"
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ expand(entites_blocage) | selectattr('state', 'eq', 'on')
+         | list | count == 0 }}
+  # Seuil de luminosité : évalué uniquement quand tout est éteint, sinon les
+  # lumières pilotées fausseraient la mesure à chaque nouveau mouvement.
+  - condition: template
+    value_template: >-
+      {{ lux_mesure | float(-1) < 0
+         or lux_mesure | float <= seuil_lux | float
+         or expand(lumieres) | selectattr('state', 'eq', 'on')
+            | list | count > 0 }}
+
+actions:
+  - action: light.turn_on
+    target:
+      entity_id: !input lumieres
+    data: "{{ parametres }}"
+
+  # Laisser la transition se terminer avant de relever l'empreinte, sinon la
+  # luminosité intermédiaire serait prise pour l'état de référence.
+  - delay: "{{ transition | int(0) + 1 }}"
+
+  - variables:
+      empreinte: >-
+        {% set ns = namespace(l=[]) %}
+        {% for e in expand(lumieres) %}
+          {% set ns.l = ns.l + [e.entity_id ~ '=' ~ e.state ~ '/'
+                                ~ (e.attributes.brightness | default('-'))] %}
+        {% endfor %}
+        {{ ns.l }}
+
+  # Tant qu'un capteur détecte, on attend ; le décompte ne démarre qu'ensuite.
+  # Un nouveau mouvement pendant le délai relance l'automatisation (restart).
+  - wait_template: >-
+      {{ expand(capteurs_mouvement) | selectattr('state', 'eq', 'on')
+         | list | count == 0 }}
+  - delay: !input delai_extinction
+
+  - variables:
+      lumieres_a_eteindre: >-
+        {% set ns = namespace(l=[]) %}
+        {% for e in expand(lumieres) %}
+          {% set actuelle = e.entity_id ~ '=' ~ e.state ~ '/'
+                            ~ (e.attributes.brightness | default('-')) %}
+          {% if not respecter_manuel or actuelle in empreinte %}
+            {% set ns.l = ns.l + [e.entity_id] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.l }}
+  - if:
+      - condition: template
+        value_template: "{{ lumieres_a_eteindre | count > 0 }}"
+    then:
+      - action: light.turn_off
+        target:
+          entity_id: "{{ lumieres_a_eteindre }}"
+        data:
+          transition: "{{ transition | int(0) }}"

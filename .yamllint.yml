@@ -1,0 +1,24 @@
+---
+extends: default
+
+rules:
+  # Les templates Jinja rendent les lignes longues inévitables.
+  line-length: disable
+  # Les blueprints commencent directement par la clé `blueprint:`.
+  document-start: disable
+  # `on:` (workflows GitHub) et `state: "on"` ne sont pas des booléens ici.
+  truthy:
+    check-keys: false
+    allowed-values: ["true", "false"]
+  comments-indentation: disable
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  braces:
+    # `{{ ... }}` dans les valeurs YAML non quotées.
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+
+ignore: |
+  .git/
+  node_modules/
