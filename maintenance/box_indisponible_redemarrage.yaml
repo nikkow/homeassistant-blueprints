@@ -1,0 +1,267 @@
+blueprint:
+  name: Redémarrage d'une box par sa prise
+  description: >
+    Quand les entités d'une box passent « indisponible » et le restent, coupe la
+    prise commandée qui l'alimente, la remet, laisse la box redémarrer, puis
+    recharge l'entrée d'intégration pour rafraîchir les appareils.
+
+    Cas d'usage d'origine : une box iDiamant (volets Bubendorff) exposée par
+    l'intégration Netatmo, qui perd sa connexion au cloud et dont seuls les
+    volets deviennent indisponibles. Le blueprint reste générique : n'importe
+    quel appareil alimenté par une prise pilotable convient.
+
+    Le cycle est retenté un nombre limité de fois, et un délai de garde empêche
+    de faire clignoter la prise en boucle quand la panne vient d'ailleurs
+    (coupure Internet, panne du cloud du fabricant).
+
+    À instancier une fois par box.
+  domain: automation
+  input:
+    entites:
+      name: Entités à surveiller
+      description: >
+        Entités fournies par la box. Il suffit d'en déclarer quelques-unes
+        représentatives — un seul volet suffit à détecter la panne, mais en
+        déclarer plusieurs évite de recycler la prise à cause d'un unique
+        appareil hors de portée radio.
+      selector:
+        entity:
+          multiple: true
+    prise:
+      name: Prise à recycler
+      description: Prise commandée qui alimente la box.
+      selector:
+        entity:
+          filter:
+            - domain: switch
+            - domain: light
+            - domain: input_boolean
+    delai_detection:
+      name: Délai avant détection
+      description: >
+        Durée d'indisponibilité continue au-delà de laquelle la panne est
+        confirmée. Augmenter cette valeur (60 à 120 s) réduit les faux positifs
+        au redémarrage de Home Assistant.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 30
+      selector:
+        duration:
+    duree_coupure:
+      name: Durée de coupure
+      description: Temps pendant lequel la prise reste éteinte.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 30
+      selector:
+        duration:
+    duree_demarrage:
+      name: Durée de démarrage
+      description: >
+        Temps laissé à la box pour démarrer et rejoindre son cloud avant le
+        rechargement de l'intégration. Trop court, le rechargement se fait dans
+        le vide et la tentative est perdue.
+      default:
+        hours: 0
+        minutes: 1
+        seconds: 0
+      selector:
+        duration:
+    delai_verification:
+      name: Délai de vérification
+      description: >
+        Temps d'attente maximal, après le rechargement, pour que toutes les
+        entités surveillées redeviennent disponibles.
+      default:
+        hours: 0
+        minutes: 3
+        seconds: 0
+      selector:
+        duration:
+    tentatives:
+      name: Nombre de tentatives
+      description: Nombre maximal de cycles coupure / démarrage / rechargement.
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 5
+          mode: box
+    delai_garde:
+      name: Délai de garde
+      description: >
+        Durée minimale entre deux cycles. Protège la box d'une succession de
+        coupures quand la cause de l'indisponibilité n'est pas la box elle-même.
+      default:
+        hours: 0
+        minutes: 30
+        seconds: 0
+      selector:
+        duration:
+    entry_id:
+      name: ID de l'entrée d'intégration
+      description: >
+        Optionnel. Par défaut, l'entrée à recharger est déduite des entités
+        surveillées. Renseigner cet identifiant si l'intégration échoue au point
+        que ses entités disparaissent : elles ne sont alors plus ciblables. Il se
+        lit dans l'URL de la page de l'intégration, après « config_entry/ ».
+      default: ""
+      selector:
+        text:
+    conditions_supplementaires:
+      name: Conditions supplémentaires
+      description: >
+        Optionnel. Conditions à remplir en plus pour autoriser le cycle. Utile
+        pour exiger que la connexion Internet soit rétablie : recycler la prise
+        ne répare pas une panne du cloud du fabricant.
+      default: []
+      selector:
+        condition:
+    actions_succes:
+      name: Notification de succès
+      description: >
+        Optionnel. Actions à exécuter quand les entités sont redevenues
+        disponibles. Les variables sont décrites dans le README : message,
+        titre, nombre, noms, restantes, noms_restants, tentatives.
+      default: []
+      selector:
+        action:
+    actions_echec:
+      name: Notification d'échec
+      description: >
+        Optionnel. Actions à exécuter quand des entités restent indisponibles
+        après toutes les tentatives. Mêmes variables que la notification de
+        succès.
+      default: []
+      selector:
+        action:
+
+# Une seule box, un seul cycle : la panne fait basculer toutes les entités en
+# même temps et déclenche autant de fois, les exécutions surnuméraires sont
+# ignorées sans remplir le journal.
+mode: single
+max_exceeded: silent
+
+variables:
+  entites: !input entites
+  prise: !input prise
+  tentatives: !input tentatives
+  delai_garde: !input delai_garde
+  entree_integration: !input entry_id
+  garde_secondes: >-
+    {{ (delai_garde.days | default(0) | int * 86400)
+       + (delai_garde.hours | default(0) | int * 3600)
+       + (delai_garde.minutes | default(0) | int * 60)
+       + (delai_garde.seconds | default(0) | int) }}
+  # Photographie au moment du déclenchement, pour la notification.
+  indisponibles: >-
+    {% set presentes = expand(entites)
+         | rejectattr('state', 'in', ['unavailable', 'unknown'])
+         | map(attribute='entity_id') | list %}
+    {{ entites | reject('in', presentes) | list }}
+  nombre: "{{ indisponibles | count }}"
+  noms: >-
+    {% set ns = namespace(l=[]) %}
+    {% for e in indisponibles %}
+      {% set ns.l = ns.l + [state_attr(e, 'friendly_name') | default(e, true)] %}
+    {% endfor %}
+    {{ ns.l }}
+
+triggers:
+  - trigger: state
+    entity_id: !input entites
+    to: "unavailable"
+    for: !input delai_detection
+
+conditions:
+  # `last_triggered` n'est mis à jour qu'après validation des conditions : la
+  # comparaison porte bien sur l'exécution précédente.
+  - condition: template
+    value_template: >-
+      {{ this.attributes.last_triggered is none
+         or (now() - this.attributes.last_triggered).total_seconds()
+            > garde_secondes | int }}
+  # Prise elle-même indisponible : Home Assistant redémarre ou l'intégration de
+  # la prise n'est pas chargée. Couper la prise n'aurait aucun effet.
+  - condition: template
+    value_template: "{{ states(prise) not in ['unavailable', 'unknown'] }}"
+  - condition: and
+    conditions: !input conditions_supplementaires
+
+actions:
+  - repeat:
+      sequence:
+        - action: homeassistant.turn_off
+          target:
+            entity_id: !input prise
+        - delay: !input duree_coupure
+        - action: homeassistant.turn_on
+          target:
+            entity_id: !input prise
+        - delay: !input duree_demarrage
+        # `continue_on_error` : si plus aucune entité de l'intégration n'existe,
+        # la cible est vide et l'appel échoue — la tentative suivante et la
+        # notification d'échec doivent tout de même avoir lieu.
+        - if:
+            - condition: template
+              value_template: "{{ entree_integration | trim != '' }}"
+          then:
+            - action: homeassistant.reload_config_entry
+              continue_on_error: true
+              data:
+                entry_id: !input entry_id
+          else:
+            - action: homeassistant.reload_config_entry
+              continue_on_error: true
+              target:
+                entity_id: !input entites
+        # L'attente s'interrompt dès que tout est revenu, sinon on retente.
+        - wait_template: >-
+            {{ expand(entites)
+               | rejectattr('state', 'in', ['unavailable', 'unknown'])
+               | list | count == entites | count }}
+          timeout: !input delai_verification
+          continue_on_timeout: true
+      until:
+        - condition: template
+          value_template: >-
+            {{ expand(entites)
+               | rejectattr('state', 'in', ['unavailable', 'unknown'])
+               | list | count == entites | count
+               or repeat.index >= tentatives | int }}
+
+  - variables:
+      # Entités non confirmées disponibles : indisponibles, inconnues, ou
+      # disparues de l'installation après un échec de chargement.
+      restantes: >-
+        {% set presentes = expand(entites)
+             | rejectattr('state', 'in', ['unavailable', 'unknown'])
+             | map(attribute='entity_id') | list %}
+        {{ entites | reject('in', presentes) | list }}
+      noms_restants: >-
+        {% set ns = namespace(l=[]) %}
+        {% for e in restantes %}
+          {% set ns.l = ns.l + [state_attr(e, 'friendly_name') | default(e, true)] %}
+        {% endfor %}
+        {{ ns.l }}
+      reussi: "{{ restantes | count == 0 }}"
+      titre: >-
+        {{ 'Box redémarrée' if reussi else 'Box toujours indisponible' }}
+      message: >-
+        {% if reussi -%}
+        {{ nombre }} entité(s) étaient indisponibles. Prise recyclée et
+        intégration rechargée : tout est de nouveau disponible.
+        {%- else -%}
+        {{ restantes | count }} entité(s) restent indisponibles après
+        {{ tentatives }} tentative(s) : {{ noms_restants | join(', ') }}.
+        {%- endif %}
+
+  - if:
+      - condition: template
+        value_template: "{{ reussi }}"
+    then:
+      - sequence: !input actions_succes
+    else:
+      - sequence: !input actions_echec

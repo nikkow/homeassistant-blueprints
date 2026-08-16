@@ -13,8 +13,9 @@ README : fonctionnement détaillé, tableau des options et limites connues.
 | [`volets/volets_soleil.yaml`](volets/volets_soleil.yaml) | Volets | Fermeture progressive selon l'azimut solaire, la radiation et la température extérieure. | 1 par fenêtre |
 | [`climatisation/clim_fenetre_ouverte.yaml`](climatisation/clim_fenetre_ouverte.yaml) | Climatisation | Coupe la clim/le chauffage à l'ouverture d'une fenêtre, restaure l'état exact à la fermeture. — [doc](climatisation/README.md) | 1 par pièce |
 | [`eclairage/eclairage_mouvement.yaml`](eclairage/eclairage_mouvement.yaml) | Éclairage | Éclairage sur mouvement, luminosité et température de couleur adaptées au jour/à la nuit, réglages manuels respectés. — [doc](eclairage/README.md) | 1 par pièce |
-| [`maintenance/batteries_faibles.yaml`](maintenance/batteries_faibles.yaml) | Maintenance | Balayage de toutes les batteries de l'installation, notification unique groupée. — [doc](maintenance/README.md) | 1 |
+| [`maintenance/batteries_faibles.yaml`](maintenance/batteries_faibles.yaml) | Maintenance | Balayage de toutes les batteries de l'installation, notification unique groupée. — [doc](maintenance/README.md#alerte-batteries-faibles) | 1 |
 | [`fenetres/fenetre_ouverte_rappel.yaml`](fenetres/fenetre_ouverte_rappel.yaml) | Fenêtres | Rappel d'une fenêtre ouverte trop longtemps par temps froid, ou au départ de la maison. — [doc](fenetres/README.md) | 1 |
+| [`maintenance/box_indisponible_redemarrage.yaml`](maintenance/box_indisponible_redemarrage.yaml) | Maintenance | Coupe et remet la prise d'une box dont les entités sont devenues indisponibles, puis recharge l'intégration (iDiamant / Netatmo). — [doc](maintenance/README.md#redémarrage-dune-box-par-sa-prise) | 1 par box |
 
 ## Installation
 
