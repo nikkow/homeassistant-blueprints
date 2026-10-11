@@ -17,6 +17,7 @@ README : fonctionnement détaillé, tableau des options et limites connues.
 | [`maintenance/batteries_faibles.yaml`](maintenance/batteries_faibles.yaml) | Maintenance | Balayage de toutes les batteries de l'installation, notification unique groupée. — [doc](maintenance/README.md#alerte-batteries-faibles) | 1 |
 | [`fenetres/fenetre_ouverte_rappel.yaml`](fenetres/fenetre_ouverte_rappel.yaml) | Fenêtres | Rappel d'une fenêtre ouverte trop longtemps par temps froid, ou au départ de la maison. — [doc](fenetres/README.md) | 1 |
 | [`maintenance/box_indisponible_redemarrage.yaml`](maintenance/box_indisponible_redemarrage.yaml) | Maintenance | Coupe et remet la prise d'une box dont les entités sont devenues indisponibles, puis recharge l'intégration (iDiamant / Netatmo). — [doc](maintenance/README.md#redémarrage-dune-box-par-sa-prise) | 1 par box |
+| [`eau/vigieau_alerte.yaml`](eau/vigieau_alerte.yaml) | Eau | Notification au changement de niveau de restriction sécheresse (API VigiEau), dans les deux sens. — [doc](eau/README.md) | 1 par commune suivie |
 
 ## Installation
 

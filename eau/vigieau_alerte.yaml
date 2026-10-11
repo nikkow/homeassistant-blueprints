@@ -1,0 +1,135 @@
+blueprint:
+  name: Alerte sécheresse VigiEau
+  description: >
+    Notifie à chaque changement de niveau de restriction d'eau, dans les deux
+    sens : durcissement et allègement. Les données proviennent de VigiEau
+    (ministère de la Transition écologique).
+
+    Ce blueprint n'interroge pas l'API : aucun blueprint Home Assistant ne peut
+    émettre une requête HTTP. Il observe un capteur qui expose le niveau en
+    vigueur — le capteur REST à créer est fourni clé en main dans le README.
+
+    À instancier une fois par capteur suivi.
+  domain: automation
+  input:
+    capteur:
+      name: Capteur de niveau
+      description: >
+        Capteur dont l'état vaut pas_de_restriction, vigilance, alerte,
+        alerte_renforcee ou crise. Tout autre état est ignoré, ce qui neutralise
+        les redémarrages de Home Assistant et les coupures de l'API.
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    niveau_minimum:
+      name: Niveau minimum notifié
+      description: >
+        Les changements qui restent entièrement en dessous de ce niveau sont
+        ignorés. Le seuil porte sur le plus sévère des deux niveaux : la
+        redescente sous le seuil reste notifiée, c'est elle qui annonce le
+        retour à la normale.
+      default: vigilance
+      selector:
+        select:
+          options:
+            - label: Toute restriction, vigilance comprise
+              value: vigilance
+            - label: Alerte et au-delà
+              value: alerte
+            - label: Alerte renforcée et au-delà
+              value: alerte_renforcee
+            - label: Crise uniquement
+              value: crise
+    notifier_levee:
+      name: Notifier les allègements
+      description: >
+        Décocher pour ne recevoir que les durcissements.
+      default: true
+      selector:
+        boolean:
+    actions_notification:
+      name: Notification
+      description: >
+        Actions à exécuter au changement de niveau. Les variables disponibles
+        sont décrites dans le README : message, titre, sens, niveau,
+        niveau_precedent, zone, lien_arrete.
+      selector:
+        action:
+
+mode: single
+max_exceeded: silent
+
+variables:
+  capteur: !input capteur
+  niveau_minimum: !input niveau_minimum
+  notifier_levee: !input notifier_levee
+  # Ordre de sévérité croissante : l'index dans cette liste sert de rang.
+  echelle:
+    - pas_de_restriction
+    - vigilance
+    - alerte
+    - alerte_renforcee
+    - crise
+  libelles:
+    pas_de_restriction: Aucune restriction
+    vigilance: Vigilance
+    alerte: Alerte
+    alerte_renforcee: Alerte renforcée
+    crise: Crise
+  etat: "{{ trigger.to_state.state }}"
+  etat_precedent: "{{ trigger.from_state.state }}"
+  rang: "{{ echelle.index(etat) if etat in echelle else -1 }}"
+  rang_precedent: "{{ echelle.index(etat_precedent) if etat_precedent in echelle else -1 }}"
+  rang_minimum: "{{ echelle.index(niveau_minimum) }}"
+  sens: >-
+    {%- if rang | int(-1) < 0 or rang_precedent | int(-1) < 0 -%}inconnu
+    {%- elif rang | int > rang_precedent | int -%}aggravation
+    {%- elif rang | int < rang_precedent | int -%}levee
+    {%- else -%}inchange{%- endif -%}
+  niveau: "{{ libelles.get(etat, etat) }}"
+  niveau_precedent: "{{ libelles.get(etat_precedent, etat_precedent) }}"
+  # Attributs facultatifs : absents si le capteur ne les expose pas.
+  zone: "{{ state_attr(capteur, 'nom') | default('', true) }}"
+  lien_arrete: >-
+    {{ (state_attr(capteur, 'arrete') or {}).get('cheminFichier')
+       | default('https://vigieau.gouv.fr/', true) }}
+  suffixe_zone: "{{ ' sur ' ~ zone if zone else '' }}"
+  titre: >-
+    {%- if etat == 'pas_de_restriction' -%}Fin des restrictions d'eau
+    {%- else -%}Sécheresse : {{ niveau }}{%- endif -%}
+  message: >-
+    {%- if etat == 'pas_de_restriction' -%}
+      Les restrictions d'eau sont levées{{ suffixe_zone }} (niveau précédent : {{ niveau_precedent }}).
+    {%- elif etat_precedent == 'pas_de_restriction' -%}
+      Restrictions d'eau en vigueur{{ suffixe_zone }} : niveau {{ niveau }}.
+    {%- elif sens == 'aggravation' -%}
+      Les restrictions d'eau se durcissent{{ suffixe_zone }} : {{ niveau_precedent }} → {{ niveau }}.
+    {%- else -%}
+      Les restrictions d'eau s'allègent{{ suffixe_zone }} : {{ niveau_precedent }} → {{ niveau }}.
+    {%- endif -%}
+
+triggers:
+  - trigger: state
+    entity_id: !input capteur
+    # Filtrer sur les états techniques évite de notifier au redémarrage de Home
+    # Assistant ou quand l'API est momentanément injoignable. Renseigner not_to
+    # écarte aussi les changements d'attribut seuls.
+    not_from:
+      - unknown
+      - unavailable
+    not_to:
+      - unknown
+      - unavailable
+
+conditions:
+  # Un état hors échelle, ou un changement qui n'en est pas un, ne notifie pas.
+  - condition: template
+    value_template: "{{ sens in ['aggravation', 'levee'] }}"
+  - condition: template
+    value_template: "{{ notifier_levee or sens == 'aggravation' }}"
+  - condition: template
+    value_template: "{{ [rang | int, rang_precedent | int] | max >= rang_minimum | int }}"
+
+actions:
+  - sequence: !input actions_notification
