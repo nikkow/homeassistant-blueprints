@@ -1,0 +1,225 @@
+blueprint:
+  name: Éclairage extérieur sur détection de personne (sonnette)
+  description: >
+    Allume une lumière extérieure quand la sonnette détecte une personne qui
+    reste dans son champ — et non un simple passant dans la rue — puis
+    l'éteint après une période sans mouvement.
+
+    Une lumière déjà allumée à la main n'est ni reprise ni éteinte. Une
+    lumière modifiée pendant le cycle (variateur, application, scène) est
+    laissée telle quelle à l'extinction.
+
+    À instancier une fois par entrée (porte, portail…).
+  domain: automation
+  input:
+    capteurs_personne:
+      name: Capteurs de détection de personne
+      description: >
+        Capteur(s) « personne » de la sonnette, de préférence restreint(s) à
+        une zone de détection devant la porte dans l'application du fabricant.
+        Un capteur de mouvement simple fonctionne aussi, mais filtre moins bien
+        les passants.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: binary_sensor
+    duree_presence:
+      name: Durée de présence minimale
+      description: >
+        Temps pendant lequel une personne doit rester détectée avant
+        l'allumage. Filtre les passants qui ne font que traverser le champ.
+        Mettre 0 pour allumer dès la détection.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 3
+      selector:
+        duration:
+    capteurs_maintien:
+      name: Capteurs de maintien
+      description: >
+        Optionnel. Capteurs dont le mouvement prolonge l'éclairage une fois
+        allumé (mouvement de la sonnette, détecteur extérieur…). Laisser vide
+        pour utiliser les capteurs de détection de personne.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: binary_sensor
+    lumieres:
+      name: Lumières
+      description: Lumières extérieures à piloter.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+    delai_extinction:
+      name: Délai avant extinction
+      description: Temps sans mouvement avant d'éteindre.
+      default:
+        hours: 0
+        minutes: 3
+        seconds: 0
+      selector:
+        duration:
+    elevation_max:
+      name: Élévation solaire maximale
+      description: >
+        L'allumage n'a lieu que si le soleil est sous cette élévation. 0° =
+        coucher du soleil ; -6° = fin du crépuscule civil. Mettre 90 pour
+        allumer à toute heure.
+      default: 0
+      selector:
+        number:
+          min: -18
+          max: 90
+          step: 1
+          unit_of_measurement: "°"
+          mode: box
+    luminosite:
+      name: Luminosité
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 100
+          unit_of_measurement: "%"
+          mode: slider
+    kelvin:
+      name: Température de couleur
+      description: >
+        Mettre à 0 pour ne pas envoyer de température de couleur — nécessaire
+        pour les lumières non réglables en blanc.
+      default: 2700
+      selector:
+        number:
+          min: 0
+          max: 6500
+          step: 100
+          unit_of_measurement: K
+          mode: box
+    transition:
+      name: Durée de transition
+      description: Fondu à l'allumage et à l'extinction.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 30
+          unit_of_measurement: s
+          mode: box
+    entites_blocage:
+      name: Entités de blocage
+      description: >
+        Optionnel. Tant que l'une de ces entités est à « on », l'automatisation
+        ne fait rien (fête, vacances…).
+      default: []
+      selector:
+        entity:
+          multiple: true
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  capteurs_personne: !input capteurs_personne
+  capteurs_maintien: !input capteurs_maintien
+  lumieres: !input lumieres
+  elevation_max: !input elevation_max
+  luminosite: !input luminosite
+  kelvin: !input kelvin
+  transition: !input transition
+  entites_blocage: !input entites_blocage
+  maintien: >-
+    {{ capteurs_maintien if capteurs_maintien | count > 0
+       else capteurs_personne }}
+  # `this` est figé au déclenchement : en mode restart, le cycle précédent est
+  # encore compté dans `current` à cet instant.
+  cycle_en_cours: "{{ this.attributes.current | default(0) | int(0) > 0 }}"
+  parametres: >-
+    {% set base = {'transition': transition | int(0),
+                   'brightness_pct': luminosite | int} %}
+    {{ dict(base, color_temp_kelvin=kelvin | int)
+       if kelvin | int > 0 else base }}
+
+triggers:
+  - trigger: state
+    entity_id: !input capteurs_personne
+    to: "on"
+    for: !input duree_presence
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ expand(entites_blocage) | selectattr('state', 'eq', 'on')
+         | list | count == 0 }}
+  # Condition de nuit ignorée pendant un cycle : une détection à l'aube doit
+  # prolonger l'éclairage, pas le laisser allumé sans extinction.
+  - condition: template
+    value_template: >-
+      {{ cycle_en_cours
+         or state_attr('sun.sun', 'elevation') | float(-90)
+            < elevation_max | float }}
+  # Lumière allumée hors cycle = allumage manuel : on n'y touche pas.
+  - condition: template
+    value_template: >-
+      {{ cycle_en_cours
+         or expand(lumieres) | selectattr('state', 'eq', 'on')
+            | list | count == 0 }}
+
+actions:
+  - action: light.turn_on
+    target:
+      entity_id: !input lumieres
+    data: "{{ parametres }}"
+
+  # Laisser la transition se terminer avant de relever l'empreinte, sinon la
+  # luminosité intermédiaire serait prise pour l'état de référence.
+  - delay: "{{ transition | int(0) + 1 }}"
+
+  - variables:
+      empreinte: >-
+        {% set ns = namespace(l=[]) %}
+        {% for e in expand(lumieres) %}
+          {% set ns.l = ns.l + [e.entity_id ~ '=' ~ e.state ~ '/'
+                                ~ (e.attributes.brightness | default('-'))] %}
+        {% endfor %}
+        {{ ns.l }}
+
+  # Attendre que tout soit calme, puis décompter. Un mouvement pendant le
+  # décompte le relance ; une nouvelle personne relance tout le cycle.
+  - repeat:
+      sequence:
+        - wait_template: >-
+            {{ expand(maintien) | selectattr('state', 'eq', 'on')
+               | list | count == 0 }}
+        - wait_template: >-
+            {{ expand(maintien) | selectattr('state', 'eq', 'on')
+               | list | count > 0 }}
+          timeout: !input delai_extinction
+          continue_on_timeout: true
+      until: "{{ not wait.completed }}"
+
+  - variables:
+      lumieres_a_eteindre: >-
+        {% set ns = namespace(l=[]) %}
+        {% for e in expand(lumieres) %}
+          {% set actuelle = e.entity_id ~ '=' ~ e.state ~ '/'
+                            ~ (e.attributes.brightness | default('-')) %}
+          {% if actuelle in empreinte %}
+            {% set ns.l = ns.l + [e.entity_id] %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.l }}
+  - if:
+      - condition: template
+        value_template: "{{ lumieres_a_eteindre | count > 0 }}"
+    then:
+      - action: light.turn_off
+        target:
+          entity_id: "{{ lumieres_a_eteindre }}"
+        data:
+          transition: "{{ transition | int(0) }}"
