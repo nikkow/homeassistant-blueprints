@@ -111,6 +111,20 @@ blueprint:
           max: 30
           unit_of_measurement: s
           mode: box
+    delai_garde:
+      name: Délai de garde après extinction
+      description: >
+        Une détection qui commence dans ce délai autour de l'extinction de la
+        lumière est ignorée. La caméra de la sonnette prend le changement
+        brusque d'éclairage (et le passage en vision nocturne infrarouge) pour
+        un mouvement, ce qui rallumerait la lumière en boucle.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 120
+          unit_of_measurement: s
+          mode: box
     entites_blocage:
       name: Entités de blocage
       description: >
@@ -132,6 +146,7 @@ variables:
   luminosite: !input luminosite
   kelvin: !input kelvin
   transition: !input transition
+  delai_garde: !input delai_garde
   entites_blocage: !input entites_blocage
   maintien: >-
     {{ capteurs_maintien if capteurs_maintien | count > 0
@@ -169,6 +184,19 @@ conditions:
       {{ cycle_en_cours
          or expand(lumieres) | selectattr('state', 'eq', 'on')
             | list | count == 0 }}
+  # Faux mouvement provoqué par l'extinction elle-même : la détection a
+  # commencé (`last_changed` du capteur, avant la durée `for`) trop près du
+  # passage à « off » d'une lumière. Écart absolu : l'ordre des deux
+  # changements d'état n'est pas garanti pendant la transition.
+  - condition: template
+    value_template: >-
+      {% set debut = trigger.to_state.last_changed %}
+      {{ expand(lumieres) | selectattr('state', 'eq', 'off')
+         | selectattr('last_changed', '>=', debut
+                      - timedelta(seconds=delai_garde | int(0)))
+         | selectattr('last_changed', '<=', debut
+                      + timedelta(seconds=delai_garde | int(0)))
+         | list | count == 0 }}
 
 actions:
   - action: light.turn_on

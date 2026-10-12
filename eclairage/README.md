@@ -119,6 +119,20 @@ Trois leviers, du plus efficace au moins efficace :
 > quelques secondes), la durée minimale peut empêcher tout allumage : la
 > mettre à 0 et s'appuyer uniquement sur la zone de détection.
 
+### Fausse détection à l'extinction
+
+Une sonnette à caméra (Aqara G4 notamment) voit l'extinction de la lumière
+comme un mouvement : l'image change brusquement et la caméra bascule en vision
+nocturne infrarouge. Sans précaution, la lumière se rallume, s'éteint après le
+délai, se rallume… en boucle.
+
+Une détection dont le **début** tombe à moins du *délai de garde* (15 s par
+défaut) du passage d'une lumière à « off » est donc ignorée. C'est le début de
+la détection qui compte, pas la fin de la durée de présence minimale : un
+capteur qui reste actif longtemps après l'extinction est bien filtré. Si la
+boucle persiste, augmenter le délai ; la contrepartie est qu'un visiteur
+arrivant juste à l'extinction ne rallume pas la lumière.
+
 ### Allumage manuel
 
 - Lumière allumée à la main avant toute détection : l'automatisation ne fait
@@ -144,6 +158,7 @@ cours est considérée comme manuelle. **Aucun helper n'est à créer.**
 | Luminosité | 100 % | |
 | Température de couleur | 2700 K | **0 = ne pas envoyer.** |
 | Durée de transition | 1 s | |
+| Délai de garde après extinction | 15 s | Ignore la fausse détection provoquée par l'extinction. 0 = désactivé. |
 | Entités de blocage | — | Tant qu'une est à `on`, rien ne se passe. |
 
 ### Notes
