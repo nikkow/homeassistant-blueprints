@@ -6,8 +6,8 @@ blueprint:
     l'éteint après une période sans mouvement.
 
     Une lumière déjà allumée à la main n'est ni reprise ni éteinte. Une
-    lumière modifiée pendant le cycle (variateur, application, scène) est
-    laissée telle quelle à l'extinction.
+    lumière dont la luminosité ou la couleur a été modifiée pendant le cycle
+    (variateur, application, scène) n'est plus touchée.
 
     À instancier une fois par entrée (porte, portail…).
   domain: automation
@@ -28,8 +28,10 @@ blueprint:
       name: Durée de présence minimale
       description: >
         Temps pendant lequel une personne doit rester détectée avant
-        l'allumage. Filtre les passants qui ne font que traverser le champ.
-        Mettre 0 pour allumer dès la détection.
+        l'allumage. Filtre les passants qui ne font que traverser le champ —
+        sauf si le capteur reste actif plus longtemps que cette durée après
+        chaque mouvement (Aqara notamment) : utiliser alors les capteurs de
+        confirmation. Mettre 0 pour allumer dès la détection.
       default:
         hours: 0
         minutes: 0
@@ -42,6 +44,19 @@ blueprint:
         Optionnel. Capteurs dont le mouvement prolonge l'éclairage une fois
         allumé (mouvement de la sonnette, détecteur extérieur…). Laisser vide
         pour utiliser les capteurs de détection de personne.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: binary_sensor
+    capteurs_confirmation:
+      name: Capteurs de confirmation
+      description: >
+        Optionnel. Si renseignés, l'allumage exige qu'au moins l'un d'eux soit
+        aussi à « on » (détecteur PIR sur le perron, capteur « personne »
+        distinct, contact de portail…). Filtre les passants et les fausses
+        détections de la caméra (phares, pluie, insectes en vision nocturne).
       default: []
       selector:
         entity:
@@ -114,15 +129,17 @@ blueprint:
     delai_garde:
       name: Délai de garde après extinction
       description: >
-        Une détection qui commence dans ce délai autour de l'extinction de la
-        lumière est ignorée. La caméra de la sonnette prend le changement
-        brusque d'éclairage (et le passage en vision nocturne infrarouge) pour
-        un mouvement, ce qui rallumerait la lumière en boucle.
-      default: 15
+        Une détection qui commence dans ce délai après l'extinction de la
+        lumière (ou pendant le fondu) est ignorée. La caméra de la sonnette
+        prend le changement brusque d'éclairage (et le passage en vision
+        nocturne infrarouge) pour un mouvement, ce qui rallumerait la lumière
+        en boucle. Doit dépasser le temps pendant lequel le capteur reste
+        actif après un mouvement.
+      default: 90
       selector:
         number:
           min: 0
-          max: 120
+          max: 600
           unit_of_measurement: s
           mode: box
     entites_blocage:
@@ -141,6 +158,7 @@ max_exceeded: silent
 variables:
   capteurs_personne: !input capteurs_personne
   capteurs_maintien: !input capteurs_maintien
+  capteurs_confirmation: !input capteurs_confirmation
   lumieres: !input lumieres
   elevation_max: !input elevation_max
   luminosite: !input luminosite
@@ -148,12 +166,14 @@ variables:
   transition: !input transition
   delai_garde: !input delai_garde
   entites_blocage: !input entites_blocage
-  maintien: >-
+  capteurs_maintien_effectifs: >-
     {{ capteurs_maintien if capteurs_maintien | count > 0
        else capteurs_personne }}
   # `this` est figé au déclenchement : en mode restart, le cycle précédent est
   # encore compté dans `current` à cet instant.
   cycle_en_cours: "{{ this.attributes.current | default(0) | int(0) > 0 }}"
+  # Luminosité attendue sur l'échelle 0-255 de l'attribut `brightness`.
+  brightness_cible: "{{ (luminosite | int * 255 / 100) | round(0) | int }}"
   parametres: >-
     {% set base = {'transition': transition | int(0),
                    'brightness_pct': luminosite | int} %}
@@ -161,8 +181,12 @@ variables:
        if kelvin | int > 0 else base }}
 
 triggers:
+  # Seul un vrai passage off → on compte : un capteur qui revient de
+  # « indisponible » (reconnexion de la sonnette, redémarrage de Home
+  # Assistant) directement à « on » n'est pas une détection.
   - trigger: state
     entity_id: !input capteurs_personne
+    from: "off"
     to: "on"
     for: !input duree_presence
 
@@ -184,10 +208,15 @@ conditions:
       {{ cycle_en_cours
          or expand(lumieres) | selectattr('state', 'eq', 'on')
             | list | count == 0 }}
+  - condition: template
+    value_template: >-
+      {{ capteurs_confirmation | count == 0
+         or expand(capteurs_confirmation) | selectattr('state', 'eq', 'on')
+            | list | count > 0 }}
   # Faux mouvement provoqué par l'extinction elle-même : la détection a
-  # commencé (`last_changed` du capteur, avant la durée `for`) trop près du
-  # passage à « off » d'une lumière. Écart absolu : l'ordre des deux
-  # changements d'état n'est pas garanti pendant la transition.
+  # commencé (`last_changed` du capteur, avant la durée `for`) dans le délai de
+  # garde qui suit le passage à « off » d'une lumière. La marge avant couvre le
+  # fondu, pendant lequel l'ordre des deux changements d'état n'est pas garanti.
   - condition: template
     value_template: >-
       {% set debut = trigger.to_state.last_changed %}
@@ -195,37 +224,50 @@ conditions:
          | selectattr('last_changed', '>=', debut
                       - timedelta(seconds=delai_garde | int(0)))
          | selectattr('last_changed', '<=', debut
-                      + timedelta(seconds=delai_garde | int(0)))
+                      + timedelta(seconds=transition | int(0) + 2))
          | list | count == 0 }}
 
 actions:
-  - action: light.turn_on
-    target:
-      entity_id: !input lumieres
-    data: "{{ parametres }}"
-
-  # Laisser la transition se terminer avant de relever l'empreinte, sinon la
-  # luminosité intermédiaire serait prise pour l'état de référence.
-  - delay: "{{ transition | int(0) + 1 }}"
-
+  # Une lumière allumée est « à nous » tant qu'elle porte encore la luminosité
+  # et la température appliquées par l'automatisation (tolérances : arrondis
+  # des ampoules). Toute autre lumière allumée a été réglée à la main pendant
+  # le cycle : une nouvelle détection ne l'écrase pas, l'extinction l'épargne.
+  # Même règle dans `lumieres_a_eteindre` plus bas.
   - variables:
-      empreinte: >-
+      lumieres_a_allumer: >-
         {% set ns = namespace(l=[]) %}
         {% for e in expand(lumieres) %}
-          {% set ns.l = ns.l + [e.entity_id ~ '=' ~ e.state ~ '/'
-                                ~ (e.attributes.brightness | default('-'))] %}
+          {% set b = e.attributes.brightness %}
+          {% set k = e.attributes.color_temp_kelvin %}
+          {% if e.state != 'on'
+                or ((b is none or (b | int - brightness_cible) | abs <= 3)
+                    and (kelvin | int == 0
+                         or (k is not none
+                             and (k | int - kelvin | int) | abs <= 100))) %}
+            {% set ns.l = ns.l + [e.entity_id] %}
+          {% endif %}
         {% endfor %}
         {{ ns.l }}
+  - if:
+      - condition: template
+        value_template: "{{ lumieres_a_allumer | count > 0 }}"
+    then:
+      - action: light.turn_on
+        target:
+          entity_id: "{{ lumieres_a_allumer }}"
+        data: "{{ parametres }}"
 
   # Attendre que tout soit calme, puis décompter. Un mouvement pendant le
   # décompte le relance ; une nouvelle personne relance tout le cycle.
+  # Pour un capteur qui reste actif après le mouvement, l'extinction a donc
+  # lieu « délai + durée de maintien du capteur » après le dernier mouvement.
   - repeat:
       sequence:
         - wait_template: >-
-            {{ expand(maintien) | selectattr('state', 'eq', 'on')
+            {{ expand(capteurs_maintien_effectifs) | selectattr('state', 'eq', 'on')
                | list | count == 0 }}
         - wait_template: >-
-            {{ expand(maintien) | selectattr('state', 'eq', 'on')
+            {{ expand(capteurs_maintien_effectifs) | selectattr('state', 'eq', 'on')
                | list | count > 0 }}
           timeout: !input delai_extinction
           continue_on_timeout: true
@@ -234,10 +276,13 @@ actions:
   - variables:
       lumieres_a_eteindre: >-
         {% set ns = namespace(l=[]) %}
-        {% for e in expand(lumieres) %}
-          {% set actuelle = e.entity_id ~ '=' ~ e.state ~ '/'
-                            ~ (e.attributes.brightness | default('-')) %}
-          {% if actuelle in empreinte %}
+        {% for e in expand(lumieres) | selectattr('state', 'eq', 'on') %}
+          {% set b = e.attributes.brightness %}
+          {% set k = e.attributes.color_temp_kelvin %}
+          {% if (b is none or (b | int - brightness_cible) | abs <= 3)
+                and (kelvin | int == 0
+                     or (k is not none
+                         and (k | int - kelvin | int) | abs <= 100)) %}
             {% set ns.l = ns.l + [e.entity_id] %}
           {% endif %}
         {% endfor %}

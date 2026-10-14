@@ -91,30 +91,39 @@ portail…).
 1. Un capteur « personne » de la sonnette reste à « détecté » pendant la
    **durée de présence minimale** (3 s par défaut).
 2. S'il fait nuit (soleil sous l'élévation choisie), qu'aucune entité de
-   blocage n'est active et que la lumière n'est pas déjà allumée à la main, la
-   lumière s'allume.
-3. Après la transition, une **empreinte** de chaque lumière est relevée (état +
-   luminosité), comme pour l'éclairage sur mouvement.
-4. L'automatisation attend que tous les capteurs de maintien soient retombés,
+   blocage n'est active, qu'un capteur de confirmation éventuel est actif, que
+   la lumière ne vient pas de s'éteindre et qu'elle n'est pas déjà allumée à
+   la main, la lumière s'allume.
+3. L'automatisation attend que tous les capteurs de maintien soient retombés,
    puis décompte le délai. Un mouvement pendant le décompte le remet à zéro ;
    une nouvelle détection de personne relance le cycle (`mode: restart`).
-5. À l'extinction, seules les lumières identiques à leur empreinte sont
-   éteintes.
+4. À l'extinction, seules les lumières qui portent encore la luminosité et la
+   température appliquées par l'automatisation sont éteintes.
 
 ### Filtrer les passants
 
-Trois leviers, du plus efficace au moins efficace :
+Quatre leviers, du plus efficace au moins efficace :
 
 1. **Zone de détection** dans l'application de la sonnette (Reolink, UniFi
    Protect, Ring, Netatmo…) : limiter la détection au perron et exclure le
    trottoir. C'est le filtre principal ; Home Assistant ne voit que le résultat.
 2. **Capteur « personne »** plutôt que « mouvement » : ignore voitures, chats
    et ombres.
-3. **Durée de présence minimale** : un passant traverse le champ en 1 à 3 s,
+3. **Capteurs de confirmation** : un second capteur doit être actif au même
+   moment — détecteur PIR sur le perron, capteur « personne » distinct,
+   contact de portail. Indispensable si la sonnette n'expose qu'un capteur de
+   mouvement qui reste actif longtemps (Aqara) : c'est alors le seul filtre
+   côté Home Assistant contre les passants, les phares, la pluie et les
+   insectes en vision nocturne.
+4. **Durée de présence minimale** : un passant traverse le champ en 1 à 3 s,
    un visiteur qui s'approche de la porte y reste plus longtemps. Augmenter à
    5 s si des passants déclenchent encore, la diminuer si l'allumage semble
    tardif.
 
+> La durée minimale ne filtre rien avec un capteur qui reste actif plusieurs
+> dizaines de secondes après chaque mouvement (Aqara G4 notamment) : elle est
+> toujours atteinte.
+>
 > Si le capteur personne de la sonnette retombe très vite (impulsion de
 > quelques secondes), la durée minimale peut empêcher tout allumage : la
 > mettre à 0 et s'appuyer uniquement sur la zone de détection.
@@ -126,25 +135,36 @@ comme un mouvement : l'image change brusquement et la caméra bascule en vision
 nocturne infrarouge. Sans précaution, la lumière se rallume, s'éteint après le
 délai, se rallume… en boucle.
 
-Une détection dont le **début** tombe à moins du *délai de garde* (15 s par
-défaut) du passage d'une lumière à « off » est donc ignorée. C'est le début de
-la détection qui compte, pas la fin de la durée de présence minimale : un
-capteur qui reste actif longtemps après l'extinction est bien filtré. Si la
-boucle persiste, augmenter le délai ; la contrepartie est qu'un visiteur
-arrivant juste à l'extinction ne rallume pas la lumière.
+Une détection dont le **début** tombe dans le *délai de garde* (90 s par
+défaut) qui suit le passage d'une lumière à « off » est donc ignorée, ainsi
+qu'une détection qui commence pendant le fondu d'extinction. C'est le début de
+la détection qui compte, pas la fin de la durée de présence minimale.
+
+Le délai doit **dépasser le temps pendant lequel le capteur reste actif**
+après un mouvement : sinon la fausse détection retombe, le moindre bruit
+d'image redéclenche juste après la fin du délai, et la boucle reprend. Le
+mesurer dans l'historique du capteur et ajouter une marge. La contrepartie est
+qu'un visiteur arrivant dans ce délai ne rallume pas la lumière.
 
 ### Allumage manuel
 
 - Lumière allumée à la main avant toute détection : l'automatisation ne fait
   rien, ni allumage ni extinction.
-- Lumière modifiée pendant un cycle (luminosité, couleur via l'appli Hue,
-  éteinte puis rallumée) : elle n'est pas éteinte à la fin du cycle.
-- Une nouvelle détection de personne pendant un cycle réapplique la
-  luminosité cible, comme pour l'éclairage sur mouvement.
+- Lumière modifiée pendant un cycle (luminosité ou couleur via l'appli Hue,
+  scène) : une nouvelle détection ne l'écrase pas, et elle n'est pas éteinte
+  à la fin du cycle.
+- Lumière éteinte à la main pendant un cycle : une nouvelle détection la
+  rallume.
 
-L'allumage manuel est reconnu par l'attribut `current` de l'automatisation au
-moment du déclenchement : une lumière allumée alors qu'aucun cycle n'est en
-cours est considérée comme manuelle. **Aucun helper n'est à créer.**
+Deux mécanismes, **sans helper à créer** :
+
+- l'allumage hors cycle est reconnu par l'attribut `current` de
+  l'automatisation au moment du déclenchement : une lumière allumée alors
+  qu'aucun cycle n'est en cours est considérée comme manuelle ;
+- pendant un cycle, une lumière est considérée comme pilotée par
+  l'automatisation tant que sa luminosité (±3 sur 255) et sa température de
+  couleur (±100 K) sont celles demandées. Une couleur RVB, ou un retour
+  manuel exactement au même réglage, ne se distinguent pas autrement.
 
 ### Options
 
@@ -153,12 +173,13 @@ cours est considérée comme manuelle. **Aucun helper n'est à créer.**
 | Capteurs de détection de personne | — | Déclenchent l'allumage. |
 | Durée de présence minimale | 3 s | Filtre les passants. 0 = immédiat. |
 | Capteurs de maintien | capteurs personne | Prolongent l'éclairage. Ex. : capteur de mouvement de la sonnette. |
-| Délai avant extinction | 3 min | Décompté une fois tous les capteurs de maintien retombés. |
+| Capteurs de confirmation | — | Si renseignés, l'un d'eux doit être actif pour allumer. |
+| Délai avant extinction | 3 min | Décompté une fois tous les capteurs de maintien retombés : s'ajoute au temps de maintien du capteur. |
 | Élévation solaire maximale | 0° | 0° = coucher du soleil, -6° = nuit noire ; 90 = toujours. |
 | Luminosité | 100 % | |
 | Température de couleur | 2700 K | **0 = ne pas envoyer.** |
 | Durée de transition | 1 s | |
-| Délai de garde après extinction | 15 s | Ignore la fausse détection provoquée par l'extinction. 0 = désactivé. |
+| Délai de garde après extinction | 90 s | Ignore la fausse détection provoquée par l'extinction. Doit dépasser le temps de maintien du capteur. 0 = désactivé. |
 | Entités de blocage | — | Tant qu'une est à `on`, rien ne se passe. |
 
 ### Notes
@@ -172,6 +193,12 @@ cours est considérée comme manuelle. **Aucun helper n'est à créer.**
   allumée jusqu'à la prochaine détection. Elle sera alors considérée comme
   allumée à la main et laissée telle quelle — l'éteindre une fois suffit à
   rétablir le fonctionnement.
+- Au démarrage de Home Assistant, toutes les lumières prennent l'heure de
+  démarrage comme dernier changement : une détection dans le délai de garde
+  qui suit est ignorée.
+- Seul un passage **off → on** déclenche : un capteur qui revient
+  d'« indisponible » directement à « on » (reconnexion de la sonnette,
+  redémarrage de Home Assistant) est ignoré.
 - Sonnettes sans `binary_sensor` (Google Nest notamment, qui n'expose que des
   événements) : créer un capteur binaire template déclenché par l'événement,
   avec `auto_off`, et le passer en entrée.
