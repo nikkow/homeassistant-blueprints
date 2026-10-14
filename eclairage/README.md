@@ -111,18 +111,20 @@ Quatre leviers, du plus efficace au moins efficace :
    et ombres.
 3. **Capteurs de confirmation** : un second capteur doit être actif au même
    moment — détecteur PIR sur le perron, capteur « personne » distinct,
-   contact de portail. Indispensable si la sonnette n'expose qu'un capteur de
-   mouvement qui reste actif longtemps (Aqara) : c'est alors le seul filtre
-   côté Home Assistant contre les passants, les phares, la pluie et les
-   insectes en vision nocturne.
+   contact de portail. Utile si la sonnette n'expose qu'un capteur de
+   mouvement et que la durée minimale ne suffit pas : c'est alors le seul
+   filtre côté Home Assistant contre les phares, la pluie et les insectes en
+   vision nocturne.
 4. **Durée de présence minimale** : un passant traverse le champ en 1 à 3 s,
-   un visiteur qui s'approche de la porte y reste plus longtemps. Augmenter à
-   5 s si des passants déclenchent encore, la diminuer si l'allumage semble
-   tardif.
+   un visiteur qui s'approche de la porte y reste plus longtemps. Augmenter si
+   des passants déclenchent encore, la diminuer si l'allumage semble tardif.
 
-> La durée minimale ne filtre rien avec un capteur qui reste actif plusieurs
-> dizaines de secondes après chaque mouvement (Aqara G4 notamment) : elle est
-> toujours atteinte.
+> La durée doit **dépasser la durée d'activité minimale du capteur**, sinon
+> elle ne filtre rien. Exemple mesuré sur une sonnette Aqara : le capteur de
+> mouvement reste à « détecté » 5 s au minimum, même pour un mouvement bref,
+> et 14 s pour une personne qui s'attarde. Le défaut de 3 s laisse donc tout
+> passer ; 8 s écarte les passages brefs. Relever ces durées dans
+> l'historique du capteur.
 >
 > Si le capteur personne de la sonnette retombe très vite (impulsion de
 > quelques secondes), la durée minimale peut empêcher tout allumage : la
@@ -130,21 +132,28 @@ Quatre leviers, du plus efficace au moins efficace :
 
 ### Fausse détection à l'extinction
 
-Une sonnette à caméra (Aqara G4 notamment) voit l'extinction de la lumière
-comme un mouvement : l'image change brusquement et la caméra bascule en vision
-nocturne infrarouge. Sans précaution, la lumière se rallume, s'éteint après le
-délai, se rallume… en boucle.
+Une sonnette à caméra voit l'extinction de la lumière comme un mouvement :
+l'image change brusquement et la caméra bascule en vision nocturne
+infrarouge. Sans précaution, la lumière se rallume, s'éteint après le délai,
+se rallume… en boucle. La fausse détection n'est pas immédiate : sur une
+sonnette Aqara, elle est arrivée **25 à 53 s** après l'extinction.
 
 Une détection dont le **début** tombe dans le *délai de garde* (90 s par
 défaut) qui suit le passage d'une lumière à « off » est donc ignorée, ainsi
 qu'une détection qui commence pendant le fondu d'extinction. C'est le début de
 la détection qui compte, pas la fin de la durée de présence minimale.
 
-Le délai doit **dépasser le temps pendant lequel le capteur reste actif**
-après un mouvement : sinon la fausse détection retombe, le moindre bruit
-d'image redéclenche juste après la fin du délai, et la boucle reprend. Le
-mesurer dans l'historique du capteur et ajouter une marge. La contrepartie est
-qu'un visiteur arrivant dans ce délai ne rallume pas la lumière.
+Le délai doit **dépasser l'écart le plus long entre une extinction et la
+fausse détection qui suit**, avec une marge. Pour le mesurer, comparer le
+journal de la lumière (extinctions) à l'historique du capteur ; un rallumage
+par l'automatisation peu après chaque extinction signe la boucle. La
+contrepartie est qu'un visiteur arrivant dans ce délai ne rallume pas la
+lumière.
+
+> Dans le journal, un bref « allumé » puis « éteint » quelques secondes après
+> une extinction, attribué à l'automatisation, peut venir du pont Hue qui
+> renvoie un état intermédiaire après le fondu. Si la trace correspondante
+> s'arrête sur la condition d'allumage manuel, rien n'a été rallumé.
 
 ### Allumage manuel
 
@@ -171,7 +180,7 @@ Deux mécanismes, **sans helper à créer** :
 | Option | Défaut | Rôle |
 | --- | --- | --- |
 | Capteurs de détection de personne | — | Déclenchent l'allumage. |
-| Durée de présence minimale | 3 s | Filtre les passants. 0 = immédiat. |
+| Durée de présence minimale | 3 s | Filtre les passants. Doit dépasser la durée d'activité minimale du capteur. 0 = immédiat. |
 | Capteurs de maintien | capteurs personne | Prolongent l'éclairage. Ex. : capteur de mouvement de la sonnette. |
 | Capteurs de confirmation | — | Si renseignés, l'un d'eux doit être actif pour allumer. |
 | Délai avant extinction | 3 min | Décompté une fois tous les capteurs de maintien retombés : s'ajoute au temps de maintien du capteur. |
@@ -179,7 +188,7 @@ Deux mécanismes, **sans helper à créer** :
 | Luminosité | 100 % | |
 | Température de couleur | 2700 K | **0 = ne pas envoyer.** |
 | Durée de transition | 1 s | |
-| Délai de garde après extinction | 90 s | Ignore la fausse détection provoquée par l'extinction. Doit dépasser le temps de maintien du capteur. 0 = désactivé. |
+| Délai de garde après extinction | 90 s | Ignore la fausse détection provoquée par l'extinction. Doit dépasser l'écart extinction → fausse détection. 0 = désactivé. |
 | Entités de blocage | — | Tant qu'une est à `on`, rien ne se passe. |
 
 ### Notes

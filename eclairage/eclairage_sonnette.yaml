@@ -28,10 +28,10 @@ blueprint:
       name: Durée de présence minimale
       description: >
         Temps pendant lequel une personne doit rester détectée avant
-        l'allumage. Filtre les passants qui ne font que traverser le champ —
-        sauf si le capteur reste actif plus longtemps que cette durée après
-        chaque mouvement (Aqara notamment) : utiliser alors les capteurs de
-        confirmation. Mettre 0 pour allumer dès la détection.
+        l'allumage. Filtre les passants qui ne font que traverser le champ, à
+        condition de dépasser la durée d'activité minimale du capteur (5 s
+        sur une sonnette Aqara : y mettre 8 s). Mettre 0 pour allumer dès la
+        détection.
       default:
         hours: 0
         minutes: 0
@@ -133,8 +133,8 @@ blueprint:
         lumière (ou pendant le fondu) est ignorée. La caméra de la sonnette
         prend le changement brusque d'éclairage (et le passage en vision
         nocturne infrarouge) pour un mouvement, ce qui rallumerait la lumière
-        en boucle. Doit dépasser le temps pendant lequel le capteur reste
-        actif après un mouvement.
+        en boucle. Doit dépasser l'écart entre l'extinction et cette fausse
+        détection (jusqu'à 53 s mesurées sur une sonnette Aqara).
       default: 90
       selector:
         number:
