@@ -7,7 +7,8 @@ blueprint:
 
     Une lumière déjà allumée à la main n'est ni reprise ni éteinte. Une
     lumière dont la luminosité ou la couleur a été modifiée pendant le cycle
-    (variateur, application, scène) n'est plus touchée.
+    (variateur, application, scène) n'est plus touchée. Une durée d'allumage
+    maximale, facultative, éteint la lumière dans tous les cas.
 
     À instancier une fois par entrée (porte, portail…).
   domain: automation
@@ -142,6 +143,20 @@ blueprint:
           max: 600
           unit_of_measurement: s
           mode: box
+    duree_max:
+      name: Durée d'allumage maximale
+      description: >
+        Filet de sécurité. Une lumière restée allumée sans interruption pendant
+        cette durée est éteinte, quelle qu'en soit la raison — y compris une
+        lumière allumée à la main. Couvre les cycles interrompus (redémarrage,
+        rechargement, erreur), qui laisseraient sinon la lumière allumée
+        indéfiniment. 0 = désactivé.
+      default:
+        hours: 0
+        minutes: 0
+        seconds: 0
+      selector:
+        duration:
     entites_blocage:
       name: Entités de blocage
       description: >
@@ -166,6 +181,11 @@ variables:
   transition: !input transition
   delai_garde: !input delai_garde
   entites_blocage: !input entites_blocage
+  duree_max: !input duree_max
+  duree_max_s: >-
+    {{ duree_max.hours | default(0) | int(0) * 3600
+       + duree_max.minutes | default(0) | int(0) * 60
+       + duree_max.seconds | default(0) | int(0) }}
   capteurs_maintien_effectifs: >-
     {{ capteurs_maintien if capteurs_maintien | count > 0
        else capteurs_personne }}
@@ -185,65 +205,93 @@ triggers:
   # « indisponible » (reconnexion de la sonnette, redémarrage de Home
   # Assistant) directement à « on » n'est pas une détection.
   - trigger: state
+    id: detection
     entity_id: !input capteurs_personne
     from: "off"
     to: "on"
     for: !input duree_presence
+  # Filet de sécurité : lumière allumée depuis trop longtemps. Avec une durée
+  # de 0, il se déclenche à chaque allumage et la première condition l'écarte
+  # (les conditions sont évaluées avant que `restart` n'arrête le cycle).
+  - trigger: state
+    id: securite
+    entity_id: !input lumieres
+    to: "on"
+    for: !input duree_max
 
 conditions:
   - condition: template
-    value_template: >-
-      {{ expand(entites_blocage) | selectattr('state', 'eq', 'on')
-         | list | count == 0 }}
-  # Condition de nuit ignorée pendant un cycle : une détection à l'aube doit
-  # prolonger l'éclairage, pas le laisser allumé sans extinction.
-  - condition: template
-    value_template: >-
-      {{ cycle_en_cours
-         or state_attr('sun.sun', 'elevation') | float(-90)
-            < elevation_max | float }}
-  # Lumière allumée hors cycle = allumage manuel : on n'y touche pas.
-  - condition: template
-    value_template: >-
-      {{ cycle_en_cours
-         or expand(lumieres) | selectattr('state', 'eq', 'on')
-            | list | count == 0 }}
-  - condition: template
-    value_template: >-
-      {{ capteurs_confirmation | count == 0
-         or expand(capteurs_confirmation) | selectattr('state', 'eq', 'on')
-            | list | count > 0 }}
-  # Faux mouvement provoqué par l'extinction elle-même : la détection a
-  # commencé (`last_changed` du capteur, avant la durée `for`) dans le délai de
-  # garde qui suit le passage à « off » d'une lumière. La marge avant couvre le
-  # fondu, pendant lequel l'ordre des deux changements d'état n'est pas garanti.
-  - condition: template
-    value_template: >-
-      {% set debut = trigger.to_state.last_changed %}
-      {{ expand(lumieres) | selectattr('state', 'eq', 'off')
-         | selectattr('last_changed', '>=', debut
-                      - timedelta(seconds=delai_garde | int(0)))
-         | selectattr('last_changed', '<=', debut
-                      + timedelta(seconds=transition | int(0) + 2))
-         | list | count == 0 }}
+    value_template: "{{ trigger.id != 'securite' or duree_max_s | int(0) > 0 }}"
+  - condition: or
+    conditions:
+      - condition: trigger
+        id: securite
+      - condition: and
+        conditions:
+          - condition: template
+            value_template: >-
+              {{ expand(entites_blocage) | selectattr('state', 'eq', 'on')
+                 | list | count == 0 }}
+          # Condition de nuit ignorée pendant un cycle : une détection à l'aube doit
+          # prolonger l'éclairage, pas le laisser allumé sans extinction.
+          - condition: template
+            value_template: >-
+              {{ cycle_en_cours
+                 or state_attr('sun.sun', 'elevation') | float(-90)
+                    < elevation_max | float }}
+          # Lumière allumée hors cycle = allumage manuel : on n'y touche pas.
+          - condition: template
+            value_template: >-
+              {{ cycle_en_cours
+                 or expand(lumieres) | selectattr('state', 'eq', 'on')
+                    | list | count == 0 }}
+          - condition: template
+            value_template: >-
+              {{ capteurs_confirmation | count == 0
+                 or expand(capteurs_confirmation) | selectattr('state', 'eq', 'on')
+                    | list | count > 0 }}
+          # Faux mouvement provoqué par l'extinction elle-même : la détection a
+          # commencé (`last_changed` du capteur, avant la durée `for`) dans le délai de
+          # garde qui suit le passage à « off » d'une lumière. La marge avant couvre le
+          # fondu, pendant lequel l'ordre des deux changements d'état n'est pas garanti.
+          - condition: template
+            value_template: >-
+              {% set debut = trigger.to_state.last_changed %}
+              {{ expand(lumieres) | selectattr('state', 'eq', 'off')
+                 | selectattr('last_changed', '>=', debut
+                              - timedelta(seconds=delai_garde | int(0)))
+                 | selectattr('last_changed', '<=', debut
+                              + timedelta(seconds=transition | int(0) + 2))
+                 | list | count == 0 }}
 
 actions:
+  - if:
+      - condition: trigger
+        id: securite
+    then:
+      - action: light.turn_off
+        target:
+          entity_id: "{{ trigger.entity_id }}"
+        data:
+          transition: "{{ transition | int(0) }}"
+      - stop: Durée d'allumage maximale atteinte
+
   # Une lumière allumée est « à nous » tant qu'elle porte encore la luminosité
   # et la température appliquées par l'automatisation (tolérances : arrondis
-  # des ampoules). Toute autre lumière allumée a été réglée à la main pendant
+  # des ampoules ; attribut absent = non vérifiable, donc accepté — `.get()`
+  # obligatoire, l'accès direct à un attribut absent fait échouer l'exécution). Toute autre lumière allumée a été réglée à la main pendant
   # le cycle : une nouvelle détection ne l'écrase pas, l'extinction l'épargne.
   # Même règle dans `lumieres_a_eteindre` plus bas.
   - variables:
       lumieres_a_allumer: >-
         {% set ns = namespace(l=[]) %}
         {% for e in expand(lumieres) %}
-          {% set b = e.attributes.brightness %}
-          {% set k = e.attributes.color_temp_kelvin %}
+          {% set b = e.attributes.get('brightness') %}
+          {% set k = e.attributes.get('color_temp_kelvin') %}
           {% if e.state != 'on'
                 or ((b is none or (b | int - brightness_cible) | abs <= 3)
-                    and (kelvin | int == 0
-                         or (k is not none
-                             and (k | int - kelvin | int) | abs <= 100))) %}
+                    and (kelvin | int == 0 or k is none
+                         or (k | int - kelvin | int) | abs <= 100)) %}
             {% set ns.l = ns.l + [e.entity_id] %}
           {% endif %}
         {% endfor %}
@@ -277,12 +325,11 @@ actions:
       lumieres_a_eteindre: >-
         {% set ns = namespace(l=[]) %}
         {% for e in expand(lumieres) | selectattr('state', 'eq', 'on') %}
-          {% set b = e.attributes.brightness %}
-          {% set k = e.attributes.color_temp_kelvin %}
+          {% set b = e.attributes.get('brightness') %}
+          {% set k = e.attributes.get('color_temp_kelvin') %}
           {% if (b is none or (b | int - brightness_cible) | abs <= 3)
-                and (kelvin | int == 0
-                     or (k is not none
-                         and (k | int - kelvin | int) | abs <= 100)) %}
+                and (kelvin | int == 0 or k is none
+                     or (k | int - kelvin | int) | abs <= 100) %}
             {% set ns.l = ns.l + [e.entity_id] %}
           {% endif %}
         {% endfor %}

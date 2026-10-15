@@ -172,8 +172,24 @@ Deux mécanismes, **sans helper à créer** :
   qu'aucun cycle n'est en cours est considérée comme manuelle ;
 - pendant un cycle, une lumière est considérée comme pilotée par
   l'automatisation tant que sa luminosité (±3 sur 255) et sa température de
-  couleur (±100 K) sont celles demandées. Une couleur RVB, ou un retour
-  manuel exactement au même réglage, ne se distinguent pas autrement.
+  couleur (±100 K) sont celles demandées. Un attribut que la lampe ne
+  fournit pas (température de couleur sur une lampe en mode couleur, par
+  exemple) n'est pas vérifié. Une couleur RVB, ou un retour manuel exactement
+  au même réglage, ne se distinguent donc pas d'un allumage automatique.
+
+### Durée d'allumage maximale
+
+Un cycle interrompu en cours de route (redémarrage ou rechargement de Home
+Assistant, erreur dans l'exécution) laisse la lumière allumée ; les détections
+suivantes la prennent alors pour un allumage manuel et n'y touchent plus. Elle
+peut rester allumée toute la nuit.
+
+La *durée d'allumage maximale* est le filet de sécurité : une lumière allumée
+sans interruption pendant cette durée est éteinte, **quelle qu'en soit la
+raison**, allumage manuel compris. Elle est désactivée par défaut (0) pour
+respecter les allumages manuels ; une valeur de 30 min convient à un éclairage
+d'entrée. Un cycle normal dure le délai d'extinction plus quelques minutes :
+garder une marge pour ne pas couper un cycle prolongé par du passage.
 
 ### Options
 
@@ -189,6 +205,7 @@ Deux mécanismes, **sans helper à créer** :
 | Température de couleur | 2700 K | **0 = ne pas envoyer.** |
 | Durée de transition | 1 s | |
 | Délai de garde après extinction | 90 s | Ignore la fausse détection provoquée par l'extinction. Doit dépasser l'écart extinction → fausse détection. 0 = désactivé. |
+| Durée d'allumage maximale | 0 (désactivé) | Éteint toute lumière allumée depuis plus longtemps, manuelle comprise. 30 min conseillé. |
 | Entités de blocage | — | Tant qu'une est à `on`, rien ne se passe. |
 
 ### Notes
@@ -199,9 +216,9 @@ Deux mécanismes, **sans helper à créer** :
 - La condition de nuit n'est pas réévaluée pendant un cycle : une détection au
   lever du soleil prolonge l'éclairage au lieu de l'abandonner allumé.
 - Un redémarrage de Home Assistant pendant un cycle le perd : la lumière reste
-  allumée jusqu'à la prochaine détection. Elle sera alors considérée comme
-  allumée à la main et laissée telle quelle — l'éteindre une fois suffit à
-  rétablir le fonctionnement.
+  allumée et sera considérée comme allumée à la main. L'éteindre une fois
+  suffit à rétablir le fonctionnement ; la durée d'allumage maximale le fait
+  automatiquement.
 - Au démarrage de Home Assistant, toutes les lumières prennent l'heure de
   démarrage comme dernier changement : une détection dans le délai de garde
   qui suit est ignorée.
