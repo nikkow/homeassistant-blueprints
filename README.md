@@ -10,14 +10,14 @@ README : fonctionnement détaillé, tableau des options et limites connues.
 
 | Blueprint | Thème | Rôle | Instances |
 | --- | --- | --- | --- |
-| [`volets/volets_soleil.yaml`](volets/volets_soleil.yaml) | Volets | Fermeture progressive selon l'azimut solaire, la radiation et la température extérieure. | 1 par fenêtre |
-| [`climatisation/clim_fenetre_ouverte.yaml`](climatisation/clim_fenetre_ouverte.yaml) | Climatisation | Coupe la clim/le chauffage à l'ouverture d'une fenêtre, restaure l'état exact à la fermeture. — [doc](climatisation/README.md) | 1 par pièce |
-| [`eclairage/eclairage_mouvement.yaml`](eclairage/eclairage_mouvement.yaml) | Éclairage | Éclairage sur mouvement, luminosité et température de couleur adaptées au jour/à la nuit, réglages manuels respectés. — [doc](eclairage/README.md#éclairage-sur-mouvement-avec-luminosité-adaptative) | 1 par pièce |
-| [`eclairage/eclairage_sonnette.yaml`](eclairage/eclairage_sonnette.yaml) | Éclairage | Lumière extérieure allumée quand la sonnette détecte une personne qui s'attarde (pas un passant), éteinte après X min sans mouvement, allumage manuel respecté. — [doc](eclairage/README.md#éclairage-extérieur-sur-détection-de-personne) | 1 par entrée |
-| [`maintenance/batteries_faibles.yaml`](maintenance/batteries_faibles.yaml) | Maintenance | Balayage de toutes les batteries de l'installation, notification unique groupée. — [doc](maintenance/README.md#alerte-batteries-faibles) | 1 |
-| [`fenetres/fenetre_ouverte_rappel.yaml`](fenetres/fenetre_ouverte_rappel.yaml) | Fenêtres | Rappel d'une fenêtre ouverte trop longtemps par temps froid, ou au départ de la maison. — [doc](fenetres/README.md) | 1 |
-| [`maintenance/box_indisponible_redemarrage.yaml`](maintenance/box_indisponible_redemarrage.yaml) | Maintenance | Coupe et remet la prise d'une box dont les entités sont devenues indisponibles, puis recharge l'intégration (iDiamant / Netatmo). — [doc](maintenance/README.md#redémarrage-dune-box-par-sa-prise) | 1 par box |
-| [`eau/vigieau_alerte.yaml`](eau/vigieau_alerte.yaml) | Eau | Notification au changement de niveau de restriction sécheresse (API VigiEau), dans les deux sens. — [doc](eau/README.md) | 1 par commune suivie |
+| [`volets/volets_soleil.yaml`](volets/volets_soleil.yaml) | Volets | Fermeture progressive quand le soleil est face à la façade, complète par forte chaleur, réouverture quand il est passé, modifications manuelles respectées. [doc](volets/README.md) | 1 par façade |
+| [`climatisation/clim_fenetre_ouverte.yaml`](climatisation/clim_fenetre_ouverte.yaml) | Climatisation | Coupe la clim/le chauffage à l'ouverture d'une fenêtre, restaure l'état exact à la fermeture. [doc](climatisation/README.md) | 1 par pièce |
+| [`eclairage/eclairage_mouvement.yaml`](eclairage/eclairage_mouvement.yaml) | Éclairage | Éclairage sur mouvement, luminosité et température de couleur adaptées au jour/à la nuit, réglages manuels respectés. [doc](eclairage/README.md#éclairage-sur-mouvement-avec-luminosité-adaptative) | 1 par pièce |
+| [`eclairage/eclairage_sonnette.yaml`](eclairage/eclairage_sonnette.yaml) | Éclairage | Lumière extérieure allumée quand la sonnette détecte une personne qui s'attarde (pas un passant), éteinte après X min sans mouvement, allumage manuel respecté. [doc](eclairage/README.md#éclairage-extérieur-sur-détection-de-personne) | 1 par entrée |
+| [`maintenance/batteries_faibles.yaml`](maintenance/batteries_faibles.yaml) | Maintenance | Balayage de toutes les batteries de l'installation, notification unique groupée. [doc](maintenance/README.md#alerte-batteries-faibles) | 1 |
+| [`fenetres/fenetre_ouverte_rappel.yaml`](fenetres/fenetre_ouverte_rappel.yaml) | Fenêtres | Rappel d'une fenêtre ouverte trop longtemps par temps froid, ou au départ de la maison. [doc](fenetres/README.md) | 1 |
+| [`maintenance/box_indisponible_redemarrage.yaml`](maintenance/box_indisponible_redemarrage.yaml) | Maintenance | Coupe et remet la prise d'une box dont les entités sont devenues indisponibles, puis recharge l'intégration (iDiamant / Netatmo). [doc](maintenance/README.md#redémarrage-dune-box-par-sa-prise) | 1 par box |
+| [`eau/vigieau_alerte.yaml`](eau/vigieau_alerte.yaml) | Eau | Notification au changement de niveau de restriction sécheresse (API VigiEau), dans les deux sens. [doc](eau/README.md) | 1 par commune suivie |
 
 ## Installation
 
@@ -38,7 +38,7 @@ Alternative manuelle : copier le fichier dans
 - Noms d'entrées, descriptions et commentaires en français.
 - Pas de helper `input_*` à créer, sauf mention explicite dans le README du
   blueprint : l'état est porté par l'exécution de l'automatisation. Corollaire
-  documenté au cas par cas — un redémarrage de Home Assistant interrompt les
+  documenté au cas par cas : un redémarrage de Home Assistant interrompt les
   cycles en cours.
 - Les entrées facultatives ont un `default` (`[]` pour une liste d'entités) et
   leur absence est gérée dans les templates, jamais par une erreur.
@@ -49,10 +49,10 @@ Alternative manuelle : copier le fichier dans
 Le dépôt est vérifié par [`.github/workflows/validation.yml`](.github/workflows/validation.yml)
 à chaque push et chaque pull request. Deux étapes :
 
-1. **`yamllint`** — formatage YAML, configuration dans
+1. **`yamllint`** : formatage YAML, configuration dans
    [`.yamllint.yml`](.yamllint.yml). Mode `--strict` : les avertissements font
    échouer le job.
-2. **`scripts/validate_blueprints.py`** — structure des blueprints :
+2. **`scripts/validate_blueprints.py`** : structure des blueprints :
    - le YAML se charge, tags `!input` / `!secret` / `!include` compris ;
    - `blueprint.name` et `blueprint.domain` sont présents, le domaine est connu ;
    - tout `!input` utilisé est déclaré (erreur), toute entrée déclarée est

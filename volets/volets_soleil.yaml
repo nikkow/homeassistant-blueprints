@@ -1,169 +1,297 @@
 blueprint:
-  name: Volets Suivi Azimuth Soleil Bureau Été (Progressif)
+  name: Volets selon le soleil
   description: >
-    Automatisation pour une fermeture progressive des volets en fonction de l'élévation du soleil, de la radiation solaire et de la température extérieure.
+    Baisse progressivement les volets d'une façade quand le soleil est face aux
+    fenêtres et que le ciel est dégagé, les ferme complètement quand il fait
+    chaud, et les rouvre quand le soleil a quitté la façade ou que le ciel se
+    couvre.
+
+    Une modification manuelle d'un volet suspend l'automatisation pendant une
+    durée configurable.
+
+    À instancier une fois par façade (une orientation = une instance).
   domain: automation
   input:
-    volets_select:
-      name: Sélecteur de mode des volets
-      description: Entité input_select pour activer/désactiver le mode automatique
+    volets:
+      name: Volets
+      description: >
+        Volets de la façade. Ils doivent accepter une position
+        (`cover.set_cover_position`).
       selector:
         entity:
-          domain: input_select
-    orientation_volet:
-      name: Orientation du volet
-      description: Orientation de la fenêtre en degrés (input_number)
+          multiple: true
+          filter:
+            - domain: cover
+    orientation:
+      name: Orientation de la façade
+      description: >
+        Direction vers laquelle regardent les fenêtres, en degrés : 0 = nord,
+        90 = est, 180 = sud, 270 = ouest.
+      default: 180
       selector:
-        entity:
-          domain: input_number
+        number:
+          min: 0
+          max: 359
+          step: 1
+          unit_of_measurement: "°"
+          mode: box
     angle_exposition:
       name: Angle d'exposition
-      description: Angle d'exposition acceptable pour le suivi du soleil (input_number)
+      description: >
+        Écart maximal entre l'azimut du soleil et l'orientation pour considérer
+        que le soleil est face aux fenêtres. 60° = de l'orientation −60° à +60°.
+      default: 60
       selector:
-        entity:
-          domain: input_number
+        number:
+          min: 10
+          max: 90
+          step: 1
+          unit_of_measurement: "°"
+          mode: slider
     elevation_min:
       name: Élévation minimale
-      description: Élévation minimale du soleil pour activer le contrôle (input_number)
+      description: >
+        Sous cette hauteur, le soleil est considéré comme masqué (relief,
+        bâtiments, arbres) et les volets ne sont baissés qu'en cas de chaleur.
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 45
+          step: 1
+          unit_of_measurement: "°"
+          mode: slider
+    capteur_ensoleillement:
+      name: Capteur d'ensoleillement
+      description: >
+        Capteur indiquant si le ciel est dégagé : radiation solaire (W/m²),
+        luminosité extérieure (lux) ou ensoleillement estimé (%). Un seul
+        capteur sert pour toute la maison : la façade est prise en compte par
+        l'orientation.
       selector:
         entity:
-          domain: input_number
-    radiation_sensor:
-      name: Capteur de radiation solaire
-      description: Capteur mesurant la radiation solaire
+          filter:
+            - domain: sensor
+    seuil_ensoleillement:
+      name: Seuil d'ensoleillement
+      description: >
+        Au-dessus de cette valeur, le soleil est considéré comme gênant. Dans
+        l'unité du capteur : environ 300 W/m², 30 000 lux ou 60 %.
+      default: 300
       selector:
-        entity:
-          domain: sensor
-    radiation_seuil:
-      name: Seuil de radiation
-      description: Seuil de radiation solaire pour l'ajustement des volets (input_number)
+        number:
+          min: 0
+          max: 200000
+          step: 1
+          mode: box
+    hysteresis:
+      name: Marge de réouverture
+      description: >
+        Une fois les volets baissés, l'ensoleillement doit repasser sous le
+        seuil moins cette marge pour les rouvrir. Évite les allers-retours
+        quand la valeur oscille autour du seuil.
+      default: 20
       selector:
-        entity:
-          domain: input_number
-    temperature_sensor:
+        number:
+          min: 0
+          max: 50
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider
+    capteur_temperature:
       name: Capteur de température extérieure
-      description: Capteur mesurant la température extérieure
+      description: Optionnel. Laisser vide pour ignorer la fermeture complète par chaleur.
+      default: []
       selector:
         entity:
-          domain: sensor
-    temperature_seuil:
-      name: Seuil de température
-      description: Seuil de température extérieure pour fermer complètement les volets (input_number)
-      default: 30
+          multiple: true
+          filter:
+            - domain: sensor
+              device_class: temperature
+    seuil_temperature:
+      name: Seuil de chaleur
+      description: >
+        Au-dessus de cette température extérieure, les volets face au soleil
+        sont fermés complètement, quel que soit l'ensoleillement.
+      default: 28
+      selector:
+        number:
+          min: 15
+          max: 45
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: box
+    ecart_min:
+      name: Écart minimal de position
+      description: >
+        Un volet n'est déplacé que si sa position diffère de la cible d'au
+        moins cette valeur. Évite les micro-mouvements toutes les 10 minutes.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 50
+          step: 1
+          unit_of_measurement: "%"
+          mode: slider
+    pause_manuelle:
+      name: Pause après une modification manuelle
+      description: >
+        Quand un volet est déplacé à une autre position que celle voulue par
+        l'automatisation, elle se met en pause pour tous les volets de la
+        façade. 0 = ne pas respecter les modifications manuelles.
+      default:
+        hours: 2
+        minutes: 0
+        seconds: 0
+      selector:
+        duration:
+    entites_blocage:
+      name: Entités de blocage
+      description: >
+        Optionnel. Tant que l'une de ces entités est à « on »,
+        l'automatisation ne déplace pas les volets (vacances, absence…).
+      default: []
       selector:
         entity:
-          domain: input_number
-    debug_text:
-      name: Entité de débogage
-      description: Entité input_text pour stocker les informations de débogage
-      selector:
-        entity:
-          domain: input_text
-    cover_entities:
-      name: Volets à contrôler
-      description: Liste des entités de volets à ajuster
-      selector:
-        target:
-          entity:
-            domain: cover
+          multiple: true
 
-trigger:
+# queued + max 2 : une pause manuelle (délai en cours) laisse au plus un
+# passage en attente, rejoué à la fin de la pause ; les autres sont ignorés.
+mode: queued
+max: 2
+max_exceeded: silent
+
+variables:
+  volets: !input volets
+  orientation: !input orientation
+  angle_exposition: !input angle_exposition
+  elevation_min: !input elevation_min
+  capteur_ensoleillement: !input capteur_ensoleillement
+  seuil_ensoleillement: !input seuil_ensoleillement
+  hysteresis: !input hysteresis
+  capteur_temperature: !input capteur_temperature
+  seuil_temperature: !input seuil_temperature
+  ecart_min: !input ecart_min
+  pause_manuelle: !input pause_manuelle
+  entites_blocage: !input entites_blocage
+
+triggers:
   - trigger: time_pattern
     minutes: /10
+    id: suivi
+  # Position stable depuis une minute : fin de mouvement, manuel ou non.
+  - trigger: state
+    entity_id: !input volets
+    attribute: current_position
+    for:
+      minutes: 1
+    id: modification
+  # Volets sans attribut de position : seul l'état ouvert / fermé est connu.
+  - trigger: state
+    entity_id: !input volets
+    to:
+      - open
+      - closed
+    for:
+      minutes: 1
+    id: modification
 
-condition:
-  - condition: state
-    entity_id: !input volets_select
-    state: Auto Pos Soleil
-  - condition: sun
-    before: sunset
-    after: sunrise
-
-action:
+actions:
+  # Calculé ici et non dans `variables` de premier niveau : un passage mis en
+  # attente pendant une pause doit utiliser l'état du moment où il s'exécute.
   - variables:
-      orientation_entity: !input orientation_volet
-      angle_exposition_entity: !input angle_exposition
-      elevation_min_entity: !input elevation_min
-      radiation_sensor_entity: !input radiation_sensor
-      radiation_seuil_entity: !input radiation_seuil
-      temperature_sensor_entity: !input temperature_sensor
-      temperature_seuil_entity: !input temperature_seuil
-      orientation_volet: "{{ states(orientation_entity) | float }}"
-      angle_exposition: "{{ states(angle_exposition_entity) | float }}"
-      elevation_min: "{{ states(elevation_min_entity) | float }}"
-      ouverture_min: 0
-      ouverture_max: 100
-      azimut_soleil: "{{ state_attr('sun.sun', 'azimuth') | float }}"
-      elevation_soleil: "{{ state_attr('sun.sun', 'elevation') | float }}"
-      azimut_min: "{{ orientation_volet - angle_exposition }}"
-      azimut_max: "{{ orientation_volet + angle_exposition }}"
-      radiation_solaire: "{{ states(radiation_sensor_entity) | float }}"
-      radiation_seuil: "{{ states(radiation_seuil_entity) | float(0) }}"
-      temperature_ext: "{{ states(temperature_sensor_entity) | float }}"
-      temperature_seuil: "{{ states(temperature_seuil_entity) | float(30) }}"
-      fermeture_brute: >-
-        {% if elevation_soleil < elevation_min %}
-          100
-        {% else %}
-          {{ 100 - (((elevation_soleil - elevation_min) / (90 - elevation_min)) * 100) | round(0) }}
-        {% endif %}
-      fermeture_finale: >-
-        {% set pos = fermeture_brute | float %}
-        {% set pos = [pos, ouverture_max] | min %}
-        {% set pos = [pos, ouverture_min] | max %}
-        {{ pos | round(0) }}
-      position_effective: >-
-        {% if azimut_min <= azimut_soleil <= azimut_max and temperature_ext > temperature_seuil %}
-          0
-        {% elif azimut_min <= azimut_soleil <= azimut_max and elevation_soleil > elevation_min and radiation_solaire > radiation_seuil %}
-          {{ fermeture_finale }}
-        {% elif radiation_solaire <= radiation_seuil and temperature_ext <= temperature_seuil %}
-          100
-        {% else %}
-          unknown
-        {% endif %}
-  - action: system_log.write
-    data:
-      message: >
-        Debug volet bureau (progressif): Azimut={{ azimut_soleil }} ({{ azimut_min }} → {{ azimut_max }}), Élévation={{ elevation_soleil }}, Radiation={{ radiation_solaire }} > seuil={{ radiation_seuil }}, Température={{ temperature_ext }} > seuil={{ temperature_seuil }}, fermeture_brute={{ fermeture_brute }}, clampée={{ fermeture_finale }}, appliquée={{ position_effective }}
-  - action: input_text.set_value
-    target:
-      entity_id: !input debug_text
-    data:
-      value: |
-        Azimut: {{ azimut_soleil }} ({{ azimut_min }} → {{ azimut_max }})
-        Élévation: {{ elevation_soleil }}
-        Radiation Moyenne: {{ radiation_solaire }} (seuil: {{ radiation_seuil }})
-        Température: {{ temperature_ext }} (seuil: {{ temperature_seuil }})
-        Fermeture brute: {{ fermeture_brute }}
-        Clampée: {{ fermeture_finale }}
-        Appliquée: {{ position_effective }}
+      azimut: "{{ state_attr('sun.sun', 'azimuth') | float(0) }}"
+      elevation: "{{ state_attr('sun.sun', 'elevation') | float(-90) }}"
+      # Écart angulaire ramené à [0, 180] : gère les façades nord (0° ± angle).
+      ecart_azimut: "{{ (((azimut - orientation | float + 540) % 360) - 180) | abs }}"
+      face: "{{ elevation > 0 and ecart_azimut <= angle_exposition | float }}"
+      ensoleillement_ok: "{{ states(capteur_ensoleillement) | is_number }}"
+      ensoleillement: "{{ states(capteur_ensoleillement) | float(0) }}"
+      # -999 = aucune mesure exploitable : la chaleur est ignorée.
+      temperature_ext: >-
+        {% set v = expand(capteur_temperature) | map(attribute='state')
+                   | select('is_number') | map('float') | list %}
+        {{ v | max if v | count > 0 else -999 }}
+      chaud: "{{ temperature_ext | float > seuil_temperature | float }}"
+      # Position par volet : attribut current_position, sinon déduite de l'état.
+      positions: >-
+        {% set ns = namespace(p={}) %}
+        {% for v in volets %}
+          {% set p = state_attr(v, 'current_position') %}
+          {% if p is number %}
+            {% set ns.p = dict(ns.p, **{v: p | int}) %}
+          {% elif is_state(v, 'open') %}
+            {% set ns.p = dict(ns.p, **{v: 100}) %}
+          {% elif is_state(v, 'closed') %}
+            {% set ns.p = dict(ns.p, **{v: 0}) %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.p }}
+      volets_baisses: "{{ positions.values() | select('lt', 100) | list | count > 0 }}"
+      seuil_effectif: >-
+        {{ seuil_ensoleillement | float * (1 - hysteresis | float / 100)
+           if volets_baisses else seuil_ensoleillement | float }}
+      ensoleille: "{{ ensoleillement_ok and ensoleillement > seuil_effectif | float }}"
+      # Plus le soleil est haut, plus les volets sont baissés (100 = ouvert).
+      position_progressive: >-
+        {% set p = 100 - (elevation - elevation_min | float)
+                         / (90 - elevation_min | float) * 100 %}
+        {{ [[p, 0] | max, 100] | min | round(0) | int }}
+      # -1 = aucune action : les volets restent où ils sont.
+      cible: >-
+        {%- if face and chaud -%} 0
+        {%- elif face and elevation > elevation_min | float and ensoleille -%} {{ position_progressive }}
+        {%- elif chaud or not ensoleillement_ok -%} -1
+        {%- else -%} 100
+        {%- endif -%}
+
   - choose:
       - conditions:
+          - condition: trigger
+            id: modification
+        sequence:
+          - variables:
+              position_volet: "{{ positions.get(trigger.entity_id, -1) | int }}"
+          # Mouvement manuel : position différente de la cible, ou volet
+          # déplacé alors que l'automatisation n'en voulait aucun. Le test de
+          # fraîcheur écarte un passage resté en attente pendant une pause.
           - condition: template
             value_template: >-
-              {{ azimut_min <= azimut_soleil <= azimut_max and temperature_ext > temperature_seuil }}
-        sequence:
-          - action: cover.set_cover_position
-            data:
-              position: 0
-            target: !input cover_entities
+              {{ (pause_manuelle.get('days', 0) * 86400
+                  + pause_manuelle.get('hours', 0) * 3600
+                  + pause_manuelle.get('minutes', 0) * 60
+                  + pause_manuelle.get('seconds', 0)) > 0
+                 and position_volet >= 0
+                 and (now() - trigger.to_state.last_updated).total_seconds() < 300
+                 and (cible | int < 0
+                      or (position_volet - cible | int) | abs >= ecart_min | int) }}
+          - delay: !input pause_manuelle
+
       - conditions:
+          - condition: trigger
+            id: suivi
+          - condition: sun
+            after: sunrise
+            before: sunset
           - condition: template
             value_template: >-
-              {{ azimut_min <= azimut_soleil <= azimut_max and elevation_soleil > elevation_min and radiation_solaire > radiation_seuil and temperature_ext <= temperature_seuil }}
+              {{ cible | int >= 0
+                 and expand(entites_blocage) | selectattr('state', 'eq', 'on')
+                     | list | count == 0 }}
         sequence:
-          - action: cover.set_cover_position
-            data:
-              position: "{{ fermeture_finale }}"
-            target: !input cover_entities
-      - conditions:
-          - condition: template
-            value_template: >-
-              {{ radiation_solaire <= radiation_seuil and temperature_ext <= temperature_seuil }}
-        sequence:
-          - action: cover.set_cover_position
-            data:
-              position: 100
-            target: !input cover_entities
-mode: single
+          - repeat:
+              for_each: >-
+                {{ volets | select('in', positions.keys())
+                   | reject('is_state', ['opening', 'closing']) | list }}
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {{ (positions[repeat.item] - cible | int) | abs >= ecart_min | int }}
+                  then:
+                    - action: cover.set_cover_position
+                      target:
+                        entity_id: "{{ repeat.item }}"
+                      data:
+                        position: "{{ cible | int }}"
